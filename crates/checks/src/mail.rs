@@ -6,9 +6,12 @@ use std::sync::LazyLock;
 use std::time::Instant;
 
 use regex::Regex;
+use serde::Serialize;
 use serde_json::{Map, Value};
 
-use crate::connection::{LineReader, Stream, Target, connect_plain, connect_tls, failure_of, problem, tls_details, with_deadline};
+use crate::connection::{
+    ConnectionCheckResult, LineReader, Stream, Target, TlsDetails, connect_plain, connect_tls, failure_of, problem, tls_details, with_deadline,
+};
 use crate::targets::{family_of, resolve_allowed};
 use crate::tcp::port_of;
 use crate::util::{Failure, bool_field, elapsed_ms, now_iso, string_field, timeout_field};
@@ -98,11 +101,11 @@ impl Dialogue {
         format!("st{}", self.tags)
     }
 
-    async fn greet(&mut self, reader: &mut LineReader, details: &mut Map<String, Value>) -> Result<(), Failure> {
+    async fn greet(&mut self, reader: &mut LineReader, details: &mut MailDetails) -> Result<(), Failure> {
         match self.mail {
             Mail::Smtp => {
                 let (code, _) = smtp_reply(reader).await?;
-                details.insert("greetingCode".into(), Value::from(code.to_string()));
+                details.greeting_code = Some(code.to_string());
                 if code != 220 {
                     return Err(problem(format!("The SMTP greeting is {code}, not 220"), "SMTP_GREETING"));
                 }
@@ -113,7 +116,7 @@ impl Dialogue {
                     return Err(problem("The server does not answer in IMAP", "IMAP_INVALID_ANSWER"));
                 };
                 let code = capture[1].to_uppercase();
-                details.insert("greetingCode".into(), Value::from(code.clone()));
+                details.greeting_code = Some(code.clone());
                 if code == "BYE" {
                     return Err(problem("The IMAP greeting is BYE: the server refuses connections", "IMAP_GREETING"));
                 }
@@ -183,18 +186,29 @@ impl Dialogue {
     }
 }
 
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailDetails {
+    #[serde(flatten)]
+    pub tls: TlsDetails,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub greeting_code: Option<String>,
+    #[serde(rename = "startTLSOffered", skip_serializing_if = "Option::is_none")]
+    pub start_tls_offered: Option<bool>,
+}
+
 struct Options {
     tls_mode: String,
     tls_verify: bool,
     require_starttls: bool,
 }
 
-async fn converse(mail: Mail, target: &Target, options: &Options, details: &mut Map<String, Value>) -> Result<(), Failure> {
+async fn converse(mail: Mail, target: &Target, options: &Options, details: &mut MailDetails) -> Result<(), Failure> {
     let plain = connect_plain(target).await?;
     let local = plain.local_addr().ok().map(|address| address.ip());
     let stream: Pin<Box<dyn Stream>> = if options.tls_mode == "TLS" {
         let tls = connect_tls(target, options.tls_verify, &[], plain).await?;
-        tls_details(&tls, details);
+        details.tls = tls_details(&tls);
         Box::pin(tls)
     } else {
         Box::pin(plain)
@@ -203,7 +217,7 @@ async fn converse(mail: Mail, target: &Target, options: &Options, details: &mut 
     let mut dialogue = Dialogue { mail, tags: 0, greeting_offers: None, local };
     dialogue.greet(&mut reader, details).await?;
     let offered = dialogue.capabilities(&mut reader).await?;
-    details.insert("startTLSOffered".into(), Value::Bool(offered));
+    details.start_tls_offered = Some(offered);
     if options.tls_mode == "STARTTLS" {
         if !offered {
             return Err(problem(format!("The {} server does not offer STARTTLS", mail.name()), "STARTTLS_NOT_OFFERED"));
@@ -214,7 +228,7 @@ async fn converse(mail: Mail, target: &Target, options: &Options, details: &mut 
             return Err(problem("The server sent more after its STARTTLS answer", "STARTTLS_FAILED"));
         }
         let secure = connect_tls(target, options.tls_verify, &[], reader.into_inner()).await?;
-        tls_details(&secure, details);
+        details.tls = tls_details(&secure);
         reader = LineReader::new(Box::pin(secure));
     }
     // A server that does not answer QUIT or LOGOUT politely has still passed the check.
@@ -235,28 +249,27 @@ async fn mail_check(mail: Mail, request: &Map<String, Value>) -> Value {
         require_starttls: bool_field(request, "requireStartTLS").unwrap_or(false),
     };
     let timeout = timeout_field(request, "timeout", 10000.0);
-    let mut details = Map::new();
-    let answer = |status: &str, failure: Option<(String, String)>, details: &Map<String, Value>, response_time: Option<i64>| {
-        let mut result = Map::new();
-        result.insert("host".into(), host.clone());
-        result.insert("port".into(), port_value.clone());
-        result.insert("status".into(), Value::from(status));
-        result.insert("responseTime".into(), Value::from(response_time.unwrap_or_else(|| elapsed_ms(start))));
-        result.insert("timestamp".into(), Value::from(now_iso()));
-        if let Some((error, code)) = failure {
-            result.insert("error".into(), Value::from(error));
-            result.insert("errorCode".into(), Value::from(code));
-        }
-        if !details.is_empty() {
-            result.insert("details".into(), Value::Object(details.clone()));
-        }
-        Value::Object(result)
+    let mut details = MailDetails::default();
+    let answer = |status: &'static str, failure: Option<(String, String)>, details: MailDetails, response_time: Option<i64>| {
+        let empty = details.tls.is_empty() && details.greeting_code.is_none() && details.start_tls_offered.is_none();
+        let (error, error_code) = failure.unzip();
+        let result = ConnectionCheckResult {
+            host: host.clone(),
+            port: port_value.clone(),
+            status,
+            response_time: response_time.unwrap_or_else(|| elapsed_ms(start)),
+            timestamp: now_iso(),
+            error,
+            error_code,
+            details: (!empty).then_some(details),
+        };
+        serde_json::to_value(result).expect("serializable result")
     };
     if !["NONE", "STARTTLS", "TLS"].contains(&options.tls_mode.as_str()) {
-        return answer("error", Some(("tlsMode must be NONE, STARTTLS or TLS".into(), "INVALID_REQUEST".into())), &details, Some(0));
+        return answer("error", Some(("tlsMode must be NONE, STARTTLS or TLS".into(), "INVALID_REQUEST".into())), details, Some(0));
     }
     if options.require_starttls && options.tls_mode == "TLS" {
-        return answer("error", Some(("requireStartTLS needs tlsMode NONE or STARTTLS".into(), "INVALID_REQUEST".into())), &details, Some(0));
+        return answer("error", Some(("requireStartTLS needs tlsMode NONE or STARTTLS".into(), "INVALID_REQUEST".into())), details, Some(0));
     }
     let host_text = host.as_str().unwrap_or("").to_string();
     let outcome = with_deadline(timeout, async {
@@ -266,8 +279,8 @@ async fn mail_check(mail: Mail, request: &Map<String, Value>) -> Value {
     })
     .await;
     match outcome {
-        Ok(()) => answer("up", None, &details, None),
-        Err(failure) => answer("down", Some(failure_of(&failure)), &details, None),
+        Ok(()) => answer("up", None, details, None),
+        Err(failure) => answer("down", Some(failure_of(&failure)), details, None),
     }
 }
 
