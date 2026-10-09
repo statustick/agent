@@ -5,7 +5,8 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use serde_json::{Map, Value, json};
+use serde::Serialize;
+use serde_json::{Map, Number, Value};
 use socket2::{Domain, Protocol, Socket, Type};
 
 use crate::targets::{family_of, resolve_allowed};
@@ -147,57 +148,102 @@ fn count_of(request: &Map<String, Value>) -> usize {
     number_field(request, "count").filter(|count| *count >= 1.0).map(|count| count as usize).unwrap_or(1).min(100)
 }
 
-async fn tcp_ping(host: Value, address: IpAddr, timeout: Duration, start: Instant) -> Value {
+/// The answer of one ping check. [host] is echoed as sent.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PingCheckResult {
+    pub host: Value,
+    pub status: &'static str,
+    pub response_time: Number,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub packet_loss: Option<String>,
+    pub timestamp: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<PingDetails>,
+}
+
+/// Round-trip statistics in milliseconds, as text with three decimals; `method` and `note` only for the TCP stand-in.
+#[derive(Debug, Serialize)]
+pub struct PingDetails {
+    pub alive: bool,
+    pub min: String,
+    pub max: String,
+    pub avg: String,
+    pub stddev: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub method: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<&'static str>,
+}
+
+async fn tcp_ping(host: Value, address: IpAddr, timeout: Duration, start: Instant) -> PingCheckResult {
     if !TCP_PING_LOGGED.swap(true, Ordering::Relaxed) {
         eprintln!("Ping: {TCP_PING_NOTE}. Ping checks use TCP until the agent can send ICMP.");
     }
     let (connected, time, failure) = tcp_probe(address, TCP_PING_PORT, timeout).await;
     let up = connected || failure.as_ref().is_some_and(|failure| failure.is("ECONNREFUSED"));
     let ms = time.to_string();
-    let mut result = Map::new();
-    result.insert("host".into(), host);
-    result.insert("status".into(), Value::from(if up { "up" } else { "down" }));
-    result.insert("responseTime".into(), Value::from(if up { time } else { elapsed_ms(start) }));
-    result.insert("packetLoss".into(), Value::from(if up { "0%" } else { "100%" }));
-    result.insert("timestamp".into(), Value::from(now_iso()));
-    if !up {
+    let error = (!up).then(|| {
         let error = failure.map(|failure| failure.message).filter(|message| !message.is_empty()).unwrap_or_else(|| "No answer".to_string());
-        result.insert("error".into(), Value::from(format!("{error}. {TCP_PING_NOTE}")));
+        format!("{error}. {TCP_PING_NOTE}")
+    });
+    PingCheckResult {
+        host,
+        status: if up { "up" } else { "down" },
+        response_time: Number::from(if up { time } else { elapsed_ms(start) }),
+        packet_loss: Some(if up { "0%" } else { "100%" }.to_string()),
+        timestamp: now_iso(),
+        error,
+        details: Some(PingDetails { alive: up, min: ms.clone(), max: ms.clone(), avg: ms, stddev: "0".into(), method: Some("tcp"), note: Some(TCP_PING_NOTE) }),
     }
-    result.insert("details".into(), json!({ "alive": up, "min": ms, "max": ms, "avg": ms, "stddev": "0", "method": "tcp", "note": TCP_PING_NOTE }));
-    Value::Object(result)
 }
 
 /// `/check/ping` and the agent's `ping` job.
 pub async fn ping_check(request: &Map<String, Value>) -> Value {
+    serde_json::to_value(ping(request).await).expect("serializable result")
+}
+
+async fn ping(request: &Map<String, Value>) -> PingCheckResult {
     let start = Instant::now();
     let host = request.get("host").cloned().unwrap_or(Value::Null);
     let timeout = timeout_field(request, "timeout", 10000.0);
     let address = match resolve_allowed(host.as_str().unwrap_or(""), family_of(request.get("ipVersion"))).await {
         Ok(addresses) => addresses[0],
         Err(failure) => {
-            return json!({ "host": host, "status": "down", "responseTime": elapsed_ms(start), "timestamp": now_iso(), "error": failure.message });
+            return PingCheckResult {
+                host,
+                status: "down",
+                response_time: Number::from(elapsed_ms(start)),
+                packet_loss: None,
+                timestamp: now_iso(),
+                error: Some(failure.message),
+                details: None,
+            };
         }
     };
     let answer = match icmp_probe(address, count_of(request), timeout).await {
         Ok(answer) => answer,
         Err(IcmpUnavailable) => return tcp_ping(host, address, timeout, start).await,
     };
-    let response_time = answer.first_time().map(Value::from).unwrap_or_else(|| Value::from(elapsed_ms(start)));
-    json!({
-        "host": host,
-        "status": if answer.alive() { "up" } else { "down" },
-        "responseTime": response_time,
-        "packetLoss": answer.packet_loss(),
-        "timestamp": now_iso(),
-        "details": {
-            "alive": answer.alive(),
-            "min": answer.min(),
-            "max": answer.max(),
-            "avg": answer.avg(),
-            "stddev": answer.stddev(),
-        }
-    })
+    PingCheckResult {
+        host,
+        status: if answer.alive() { "up" } else { "down" },
+        response_time: answer.first_time().and_then(Number::from_f64).unwrap_or_else(|| Number::from(elapsed_ms(start))),
+        packet_loss: Some(answer.packet_loss()),
+        timestamp: now_iso(),
+        error: None,
+        details: Some(PingDetails {
+            alive: answer.alive(),
+            min: answer.min(),
+            max: answer.max(),
+            avg: answer.avg(),
+            stddev: answer.stddev(),
+            method: None,
+            note: None,
+        }),
+    }
 }
 
 #[cfg(test)]
