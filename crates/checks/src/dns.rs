@@ -8,6 +8,7 @@ use hickory_resolver::proto::op::ResponseCode;
 use hickory_resolver::proto::rr::Name;
 use hickory_resolver::proto::rr::{RData, RecordType};
 use hickory_resolver::{Resolver, TokioResolver};
+use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 use crate::targets::{refused_answer, target_not_allowed};
@@ -147,6 +148,29 @@ pub fn has_records(records: &Value) -> bool {
     }
 }
 
+/// The answer of one DNS check. [hostname] and [record_type] are echoed as sent.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DnsCheckResult {
+    pub hostname: Value,
+    pub record_type: Value,
+    pub status: &'static str,
+    pub response_time: i64,
+    pub timestamp: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub records: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record_count: Option<usize>,
+    #[serde(rename = "expectedIP", skip_serializing_if = "Option::is_none")]
+    pub expected_ip: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_value: Option<Value>,
+}
+
 /// `/check/dns` and the agent's `dns` job.
 pub async fn dns_check(request: &Map<String, Value>) -> Value {
     let start = Instant::now();
@@ -155,7 +179,20 @@ pub async fn dns_check(request: &Map<String, Value>) -> Value {
     let timeout = timeout_field(request, "timeout", 10000.0);
     let expected_ip = request.get("expectedIP").cloned();
     let expected_value = request.get("expectedValue").cloned();
-    match resolve_dns(hostname.as_str().unwrap_or(""), record_type.as_str().unwrap_or("A"), timeout).await {
+    let mut result = DnsCheckResult {
+        status: "down",
+        response_time: 0,
+        timestamp: String::new(),
+        error: None,
+        error_code: None,
+        records: None,
+        record_count: None,
+        expected_ip: None,
+        expected_value: None,
+        hostname,
+        record_type,
+    };
+    match resolve_dns(result.hostname.as_str().unwrap_or(""), result.record_type.as_str().unwrap_or("A"), timeout).await {
         Ok(records) => {
             let mut has_expected = true;
             if let (true, Some(items)) = (truthy(expected_ip.as_ref()), records.as_array()) {
@@ -164,43 +201,26 @@ pub async fn dns_check(request: &Map<String, Value>) -> Value {
             if let (true, Some(items), Some(wanted)) = (truthy(expected_value.as_ref()), records.as_array(), string_field(request, "expectedValue")) {
                 has_expected = items.iter().any(|item| record_text(item).is_some_and(|text| text.contains(&wanted)));
             }
-            let mut result = Map::new();
-            result.insert("hostname".into(), hostname);
-            result.insert("recordType".into(), record_type);
-            result.insert("status".into(), Value::from(if has_records(&records) && has_expected { "up" } else { "down" }));
-            result.insert("responseTime".into(), Value::from(elapsed_ms(start)));
-            result.insert("timestamp".into(), Value::from(now_iso()));
-            let (list, count) = match records {
-                Value::Array(items) => {
-                    let count = items.len();
-                    (Value::Array(items), count)
-                }
-                single => (Value::Array(vec![single]), 1),
+            if has_records(&records) && has_expected {
+                result.status = "up";
+            }
+            let list = match records {
+                Value::Array(items) => items,
+                single => vec![single],
             };
-            result.insert("records".into(), list);
-            result.insert("recordCount".into(), Value::from(count));
-            if let Some(expected) = expected_ip {
-                result.insert("expectedIP".into(), expected);
-            }
-            if let Some(expected) = expected_value {
-                result.insert("expectedValue".into(), expected);
-            }
-            Value::Object(result)
+            result.record_count = Some(list.len());
+            result.records = Some(list);
+            result.expected_ip = expected_ip;
+            result.expected_value = expected_value;
         }
         Err(failure) => {
-            let mut result = Map::new();
-            result.insert("hostname".into(), hostname);
-            result.insert("recordType".into(), record_type);
-            result.insert("status".into(), Value::from("down"));
-            result.insert("responseTime".into(), Value::from(elapsed_ms(start)));
-            result.insert("timestamp".into(), Value::from(now_iso()));
-            result.insert("error".into(), Value::from(failure.message));
-            if let Some(code) = failure.code {
-                result.insert("errorCode".into(), Value::from(code));
-            }
-            Value::Object(result)
+            result.error = Some(failure.message);
+            result.error_code = failure.code;
         }
     }
+    result.response_time = elapsed_ms(start);
+    result.timestamp = now_iso();
+    serde_json::to_value(result).expect("serializable result")
 }
 
 #[cfg(test)]

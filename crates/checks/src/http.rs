@@ -8,7 +8,8 @@ use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
-use serde_json::{Map, Value, json};
+use serde::Serialize;
+use serde_json::{Map, Value};
 use url::Url;
 
 use crate::assets::{MAX_ASSETS, check_assets, extract_assets};
@@ -16,7 +17,7 @@ use crate::blocking::{detect_block, with_user_agent};
 use crate::json::check_json;
 use crate::proxy::{env_settings, forward_refused, proxy_for, refusal, refused};
 use crate::targets::{Family, check_target, family_of, lookup, resolve_allowed};
-use crate::util::{Failure, bool_field, elapsed_ms, now_iso, number_field, object, string_field, timeout_field, truthy};
+use crate::util::{Failure, bool_field, elapsed_ms, now_iso, number_field, string_field, timeout_field, truthy};
 
 const MAX_REDIRECTS: usize = 5;
 pub const MAX_BODY_BYTES: usize = 64 * 1024;
@@ -466,59 +467,92 @@ pub fn check_status(result: &HttpRequestResult) -> &'static str {
     }
 }
 
+/// The answer of one HTTP check.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpCheckResult {
+    pub url: Value,
+    pub method: Value,
+    pub status: &'static str,
+    pub response_time: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub http_status: Option<u16>,
+    pub timestamp: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<HttpDetails>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpDetails {
+    /// Echoed as sent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_status: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_text: Option<Value>,
+    pub text_match: bool,
+    pub headers: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assets: Option<Value>,
+    #[serde(rename = "legacyTLS", skip_serializing_if = "Option::is_none")]
+    pub legacy_tls: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weak_key: Option<bool>,
+}
+
 /// `/check/http` and the agent's `http` job.
 pub async fn http_check(request: &Map<String, Value>) -> Value {
     let start = Instant::now();
     let url = request.get("url").cloned().unwrap_or(Value::Null);
     let method = request.get("method").cloned().unwrap_or_else(|| Value::from("GET"));
     let options = HttpOptions::from_request(request);
-    match make_http_request(url.as_str().unwrap_or(""), &options).await {
+    let result = match make_http_request(url.as_str().unwrap_or(""), &options).await {
         Ok(result) => {
             let error = result
                 .block_reason
                 .map(|reason| (format!("Blocked by the site's firewall: {reason}"), "BLOCKED"))
                 .or_else(|| result.json_failure.clone().map(|failure| (failure, "JSON_ASSERTION")));
-            let mut details = Map::new();
-            if let Some(expected) = request.get("expectedStatus") {
-                details.insert("expectedStatus".into(), expected.clone());
+            let legacy = result.legacy_tls.as_ref();
+            HttpCheckResult {
+                status: check_status(&result),
+                response_time: result.page_time_ms,
+                http_status: Some(result.status),
+                timestamp: now_iso(),
+                error_type: error.as_ref().map(|(_, kind)| kind.to_string()),
+                error: error.map(|(message, _)| message),
+                details: Some(HttpDetails {
+                    expected_status: request.get("expectedStatus").cloned(),
+                    expected_text: request.get("expectedText").cloned(),
+                    text_match: result.text_match,
+                    headers: result.headers,
+                    assets: result.asset_check,
+                    legacy_tls: legacy.map(|_| true),
+                    tls_version: legacy.map(|legacy| legacy.version.clone()),
+                    weak_key: legacy.filter(|legacy| legacy.weak_key).map(|_| true),
+                }),
+                url,
+                method,
             }
-            if let Some(expected) = request.get("expectedText") {
-                details.insert("expectedText".into(), expected.clone());
-            }
-            details.insert("textMatch".into(), Value::Bool(result.text_match));
-            details.insert("headers".into(), json!(result.headers));
-            if let Some(assets) = &result.asset_check {
-                details.insert("assets".into(), assets.clone());
-            }
-            if let Some(legacy) = &result.legacy_tls {
-                details.insert("legacyTLS".into(), Value::Bool(true));
-                details.insert("tlsVersion".into(), Value::from(legacy.version.clone()));
-                if legacy.weak_key {
-                    details.insert("weakKey".into(), Value::Bool(true));
-                }
-            }
-            object(vec![
-                ("url", Some(url)),
-                ("method", Some(method)),
-                ("status", Some(Value::from(check_status(&result)))),
-                ("responseTime", Some(Value::from(result.page_time_ms))),
-                ("httpStatus", Some(Value::from(result.status))),
-                ("timestamp", Some(Value::from(now_iso()))),
-                ("error", error.as_ref().map(|(message, _)| Value::from(message.clone()))),
-                ("errorType", error.as_ref().map(|(_, kind)| Value::from(*kind))),
-                ("details", Some(Value::Object(details))),
-            ])
         }
-        Err(failure) => json!({
-            "url": url,
-            "method": method,
-            "status": "down",
-            "responseTime": elapsed_ms(start),
-            "timestamp": now_iso(),
-            "error": failure.message,
-            "errorType": failure.name,
-        }),
-    }
+        Err(failure) => HttpCheckResult {
+            url,
+            method,
+            status: "down",
+            response_time: elapsed_ms(start),
+            http_status: None,
+            timestamp: now_iso(),
+            error: Some(failure.message),
+            error_type: Some(failure.name),
+            details: None,
+        },
+    };
+    serde_json::to_value(result).expect("serializable result")
 }
 
 /// The parts of [request] a multi check's HTTP item passes on: no body, assets, JSON assertions or IP version.
