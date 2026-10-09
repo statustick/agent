@@ -7,7 +7,7 @@ on:
     types: [opened, synchronize, reopened, edited]
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}-${{ github.event.action == 'edited' && 'title' || 'code' }}
   cancel-in-progress: true
 
 permissions:
