@@ -4,7 +4,7 @@ description: StatusTick private agent for Kubernetes. Checks services inside
   your cluster and network for a StatusTick private location.
 type: application
 version: 1.0.0
-appVersion: "1.0.0" # x-release-please-version
+appVersion: "1.0.1" # x-release-please-version
 kubeVersion: ">=1.27.0-0"
 home: https://statustick.com/docs/private-agents
 sources:
