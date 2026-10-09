@@ -19,7 +19,7 @@ const MAX_CHAIN: usize = 10;
 /// The TLS versions a client can ask for, oldest first.
 pub const TLS_VERSIONS: [(&str, u16); 4] = [("TLSv1", 0x0301), ("TLSv1.1", 0x0302), ("TLSv1.2", 0x0303), ("TLSv1.3", 0x0304)];
 
-/// The certificates a server presented, with Node.js's `authorized` and `authorizationError`.
+/// The certificates a server presented, whether the chain is trusted, and why not.
 pub struct PeerCertificates {
     pub chain: Vec<CertificateDer<'static>>,
     pub authorization_error: Option<String>,

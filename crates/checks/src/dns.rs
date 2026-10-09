@@ -1,5 +1,4 @@
-//! DNS checks: one query to the system's name servers, no cache and no search list, answered in the shapes Node.js's
-//! `dns.resolve*` gives.
+//! DNS checks: one query to the system's name servers, no cache and no search list.
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
@@ -59,7 +58,7 @@ fn failure_of(error: &NetError, record_type: &str, hostname: &str) -> Failure {
     Failure::coded(format!("{} {code} {hostname}", query_name(record_type)), code)
 }
 
-/// The records for [hostname] as Node.js shapes them: strings for A, AAAA, CNAME and NS, `{exchange, priority}` for MX,
+/// The records for [hostname] in the shapes StatusTick reads: strings for A, AAAA, CNAME and NS, `{exchange, priority}` for MX,
 /// arrays of strings for TXT, one SOA object, `{critical, <tag>: value}` for CAA.
 pub async fn resolve_dns(hostname: &str, record_type: &str, timeout: Duration) -> Result<Value, Failure> {
     let upper = record_type.to_uppercase();

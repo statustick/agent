@@ -278,13 +278,15 @@ impl Agent {
             self.client.forget_agent();
             let message = error.body_text("message").filter(|message| !message.is_empty()).unwrap_or_else(|| {
                 let minimum = match &error {
-                    CallError::Api { body, .. } => body
-                        .get("minimumVersion")
-                        .map(|version| version.as_str().map(str::to_string).unwrap_or_else(|| version.to_string()))
-                        .unwrap_or_else(|| "undefined".into()),
-                    _ => "undefined".into(),
+                    CallError::Api { body, .. } => {
+                        body.get("minimumVersion").map(|version| version.as_str().map(str::to_string).unwrap_or_else(|| version.to_string()))
+                    }
+                    _ => None,
                 };
-                format!("Install version {minimum} or later.")
+                match minimum {
+                    Some(minimum) => format!("Install version {minimum} or later."),
+                    None => "Install the latest version.".into(),
+                }
             });
             self.set_state(State::UpdateRequired, &format!("Update required: {message} Polling stopped."));
             return self.idle_until_stopped().await;

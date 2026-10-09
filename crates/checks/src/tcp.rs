@@ -8,7 +8,7 @@ use tokio::net::TcpStream;
 use crate::targets::{family_of, resolve_allowed};
 use crate::util::{Failure, connect_failure, elapsed_ms, now_iso, number_field, object, timeout_field};
 
-/// Connects to [address]; the failure is the Node.js one, or `Connection timeout` after [timeout].
+/// Connects to [address]; the failure carries the errno code, or is `Connection timeout` after [timeout].
 pub async fn connect(address: IpAddr, port: u16, timeout: Duration) -> Result<TcpStream, Failure> {
     match tokio::time::timeout(timeout, TcpStream::connect(SocketAddr::new(address, port))).await {
         Ok(Ok(stream)) => {

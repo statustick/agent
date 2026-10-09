@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Map, Value, json};
 use statustick_checks::connection::{Stream, Target as TlsTarget, connect_tls};
 use statustick_checks::targets::{AllowRule, bound_to, parse_allow_list, resolve_allowed};
-use statustick_checks::util::{Failure, bool_field, connect_failure, js_number, number_field, string_field, utf16_prefix};
+use statustick_checks::util::{Failure, bool_field, connect_failure, number_field, number_text, string_field, utf16_prefix};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -154,12 +154,12 @@ pub fn same_value(actual: &str, expected: &str) -> bool {
     !a.is_empty() && !b.is_empty() && matches!((number(a), number(b)), (Some(x), Some(y)) if x == y)
 }
 
-/// A query answer as text, as `String(value)` in JavaScript: null is empty, objects are JSON.
+/// A query answer as text: null is empty, objects are JSON.
 pub fn value_text(value: &Value) -> String {
     match value {
         Value::Null => String::new(),
         Value::String(text) => text.clone(),
-        Value::Number(number) => number.as_f64().map(js_number).unwrap_or_else(|| number.to_string()),
+        Value::Number(number) => number.as_f64().map(number_text).unwrap_or_else(|| number.to_string()),
         Value::Bool(flag) => flag.to_string(),
         other => other.to_string(),
     }
@@ -207,12 +207,12 @@ fn failure_of(error: &DriverError, phase: Phase) -> (String, String) {
     ("CONNECT_FAILED".into(), message)
 }
 
-/// A TCP connection to the allowed address, failing as Node.js's `net.connect` does.
+/// A TCP connection to the allowed address; the failure carries the errno code.
 pub async fn connect_tcp(target: &Target) -> Result<TcpStream, DriverError> {
     TcpStream::connect((target.address, target.port)).await.map_err(|error| connect_failure(&error, target.address, target.port).into())
 }
 
-/// TLS over [stream] with Node.js's verification: the chain and, with tlsVerify, the host name.
+/// TLS over [stream], verifying the chain and, with tlsVerify, the host name.
 pub async fn secure<S: Stream + 'static>(target: &Target, stream: S) -> Result<Box<dyn Stream>, DriverError> {
     let tls_target = TlsTarget { host: target.host.clone(), address: target.address, port: target.port };
     let tls = connect_tls(&tls_target, target.tls_verify, &[], stream).await?;
@@ -279,7 +279,7 @@ pub async fn database_check(kind: &str, request: &Map<String, Value>, env: &Env)
     };
 
     let deadline = tokio::time::Instant::now() + timeout;
-    let timed_out = || DriverError::problem(format!("Timed out after {} ms", js_number(timeout_ms)), "TIMEOUT");
+    let timed_out = || DriverError::problem(format!("Timed out after {} ms", number_text(timeout_ms)), "TIMEOUT");
     let work = async {
         let address = match tokio::time::timeout_at(deadline, resolve_allowed(&host, 0)).await {
             Err(_) => return Err((timed_out(), Phase::Connect)),

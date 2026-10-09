@@ -247,7 +247,7 @@ pub fn only_documented_fields(kind: &str, result: &Map<String, Value>) -> Map<St
 pub fn header_mismatch(expected: &Map<String, Value>, actual: &Map<String, Value>) -> Value {
     let lower: Vec<(String, &Value)> = actual.iter().map(|(name, value)| (name.to_lowercase(), value)).collect();
     for (name, value) in expected {
-        // A later duplicate name wins, as Map construction does in JavaScript.
+        // A later duplicate header name wins.
         match lower.iter().rev().find(|(candidate, _)| *candidate == name.to_lowercase()) {
             None => return json!({ "name": name, "reason": "missing" }),
             Some((_, found)) if *found != value => return json!({ "name": name, "reason": "different" }),

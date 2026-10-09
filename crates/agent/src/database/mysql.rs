@@ -1,5 +1,5 @@
 //! MySQL and MariaDB: the read-only query as a prepared statement, which refuses a second statement, inside a read-only
-//! transaction that is rolled back. Error codes carry the names the JavaScript driver uses.
+//! transaction that is rolled back. Error codes are the MySQL names StatusTick expects (`ER_ACCESS_DENIED_ERROR`, …).
 use std::time::Instant;
 
 use mysql_async::prelude::Queryable;
@@ -104,7 +104,7 @@ impl Session {
                 return Err(error);
             }
             // MariaDB has max_statement_time, in seconds, instead.
-            let seconds = statustick_checks::util::js_number(timeout_ms as f64 / 1000.0);
+            let seconds = statustick_checks::util::number_text(timeout_ms as f64 / 1000.0);
             self.conn.query_drop(format!("SET SESSION max_statement_time = {seconds}")).await.map_err(driver_error)?;
         }
         self.conn.query_drop("START TRANSACTION READ ONLY").await.map_err(driver_error)?;

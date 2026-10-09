@@ -21,7 +21,7 @@ fn list(value: Option<&Value>) -> Vec<Value> {
     value.and_then(Value::as_array).cloned().unwrap_or_default()
 }
 
-/// The first [units] UTF-16 units of [text], as `slice(0, units)` in JavaScript.
+/// The first [units] UTF-16 units of [text].
 fn utf16_cut(text: &str, units: usize) -> String {
     statustick_checks::util::utf16_prefix(text, units).to_string()
 }
@@ -30,7 +30,7 @@ fn clean(message: Option<&Value>) -> String {
     let raw = match message {
         Some(Value::String(text)) => text.clone(),
         Some(Value::Null) | None => String::new(),
-        Some(other) => crate::validate::js_string(other),
+        Some(other) => crate::validate::display_text(other),
     };
     let mut out = String::with_capacity(raw.len());
     let mut chars = raw.chars().peekable();
@@ -164,10 +164,10 @@ pub fn build_result(report: &Value) -> (Map<String, Value>, Option<String>, Opti
         let message = failing.result.get("error").and_then(|error| error.get("message")).filter(|message| truthy(Some(message)));
         Value::from(match message {
             Some(message) => clean(Some(message)),
-            None => clean(Some(&Value::from(format!(
-                "Test ended with status {}",
-                failing.result.get("status").map(crate::validate::js_string).unwrap_or_else(|| "undefined".into())
-            )))),
+            None => clean(Some(&Value::from(match failing.result.get("status") {
+                Some(status) => format!("Test ended with status {}", crate::validate::display_text(status)),
+                None => "Test ended without a status".into(),
+            }))),
         })
     } else if let Some(first) = load_errors.first() {
         Value::from(first.clone())

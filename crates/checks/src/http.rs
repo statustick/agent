@@ -1,4 +1,4 @@
-//! HTTP checks: the request as Node.js's fetch sends it, redirects followed by hand so every hop passes the target
+//! HTTP checks: one request, redirects followed by hand so every hop passes the target
 //! rules, a capped body read for the text, JSON and block checks, and the page's assets when asked.
 use std::collections::{BTreeMap, HashSet};
 use std::io::Read;
@@ -66,7 +66,7 @@ fn build_client(family: Family) -> reqwest::Client {
         .expect("HTTP client")
 }
 
-/// One client per IP version, shared by every check so connections are reused as Node.js's dispatchers do.
+/// One client per IP version, shared by every check so connections are reused.
 pub fn client_for(family: Family) -> &'static reqwest::Client {
     static CLIENTS: LazyLock<[reqwest::Client; 3]> = LazyLock::new(|| [build_client(0), build_client(4), build_client(6)]);
     &CLIENTS[match family {
@@ -187,7 +187,7 @@ fn body_content_type(body_type: &str) -> &'static str {
     }
 }
 
-/// A fetch failure: the target rules' refusal when they refused, else `fetch failed` as Node.js's fetch says.
+/// A fetch failure: the target rules' refusal when they refused, else `fetch failed`.
 fn fetch_failure(error: &reqwest::Error) -> Failure {
     let mut current: Option<&(dyn std::error::Error + 'static)> = Some(error);
     while let Some(error) = current {

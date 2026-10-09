@@ -101,7 +101,7 @@ pub fn now_ms() -> i64 {
 
 fn network_error(error: &reqwest::Error) -> String {
     if error.is_timeout() {
-        return "The operation was aborted due to timeout".to_string();
+        return "Timed out".to_string();
     }
     let mut current: Option<&(dyn std::error::Error + 'static)> = Some(error);
     let mut deepest = error.to_string();
@@ -115,8 +115,8 @@ fn network_error(error: &reqwest::Error) -> String {
                 return code;
             }
         }
-        if let Some(node) = statustick_checks::tls::node_error(inner) {
-            return node.code;
+        if let Some(failure) = statustick_checks::tls::verify_error(inner) {
+            return failure.code;
         }
         deepest = inner.to_string();
         current = inner.source();
