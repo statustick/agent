@@ -15,32 +15,16 @@ use sha2::{Digest, Sha256};
 use tokio::time::sleep;
 
 #[tokio::test(flavor = "multi_thread")]
-async fn connects_leases_runs_and_posts_only_documented_fields() {
-    let port = target().await;
-    let closed = free_port();
-    let list = json!([
-        { "leaseId": "l-http", "expiresAt": in_one_minute(), "type": "http", "check": { "url": format!("http://127.0.0.1:{port}/json"), "expectedText": "ok", "expectedHeaders": { "X-Version": "3" }, "json": [{ "path": "$.count", "equals": 3 }], "timeout": null } },
-        { "leaseId": "l-tcp", "expiresAt": in_one_minute(), "type": "tcp", "check": { "host": "127.0.0.1", "port": port } },
-        { "leaseId": "l-closed", "expiresAt": in_one_minute(), "type": "tcp", "check": { "host": "127.0.0.1", "port": closed, "timeout": 2000 } },
-        { "leaseId": "l-missing", "expiresAt": in_one_minute(), "type": "tcp", "check": { "host": "", "port": 1 } },
-        { "leaseId": "l-invalid", "expiresAt": in_one_minute(), "type": "dns", "check": { "hostname": "example.com", "recordType": "PTR" } },
-        { "leaseId": "l-metadata", "expiresAt": in_one_minute(), "type": "http", "check": { "url": "http://169.254.169.254/latest" } },
-        { "leaseId": "l-browser", "expiresAt": in_one_minute(), "type": "browser", "check": { "script": "x" } },
-        { "leaseId": "l-secret", "expiresAt": in_one_minute(), "type": "postgres", "check": { "host": "db.internal", "port": 5432, "passwordEnv": "HOME" } }
-    ]);
-    let count = list.as_array().unwrap().len();
-    let fake = Platform::start(vec![
-        ("/v1/connect", Box::new(|_, _| connected(json!({})))),
-        ("/v1/jobs", Box::new(move |_, n| if n == 1 { jobs(list.clone()) } else { Answer::Hang })),
-    ])
-    .await;
+async fn connects_with_its_token_and_reports_its_setup() {
+    let fake = Platform::start(vec![("/v1/connect", Box::new(|_, _| connected(json!({})))), ("/v1/jobs", Box::new(|_, _| jobs(json!([]))))]).await;
     let mut agent = Agent::start(&[("STATUSTICK_URL", &fake.url), ("STATUSTICK_CONCURRENCY", "10")], &[]);
-    until("all results", 20000, || fake.results().len() == count).await;
+    until("a lease", 20000, || !fake.calls("/v1/jobs").is_empty()).await;
     let connect = fake.calls("/v1/connect").remove(0);
     let lease = fake.calls("/v1/jobs").remove(0);
-    let results = fake.results();
     let lines = agent.lines();
     agent.stop().await;
+    assert_eq!(connect.headers["authorization"], format!("Bearer {TOKEN}"));
+    assert!(regex::Regex::new(r"^StatusTick-Agent/\d+\.\d+\.\d+").unwrap().is_match(&connect.headers["user-agent"]));
     assert_eq!(
         normalize(&connect.body),
         json!({
@@ -53,35 +37,69 @@ async fn connects_leases_runs_and_posts_only_documented_fields() {
         })
     );
     assert_eq!(lease.query, HashMap::from([("max".to_string(), "10".to_string()), ("wait".to_string(), "1".to_string())]));
-    let refused = format!("connect ECONNREFUSED 127.0.0.1:{closed}");
-    assert_eq!(
-        normalize(&Value::Array(results)),
-        json!([
-            { "leaseId": "l-browser", "result": { "status": "error", "error": "Unsupported check type: browser" } },
-            { "leaseId": "l-closed", "result": { "status": "down", "error": refused, "errorCode": "ECONNREFUSED" } },
-            {
-                "leaseId": "l-http",
-                "result": { "status": "down", "httpStatus": 200, "details": { "textMatch": true, "headerMismatch": { "name": "X-Version", "reason": "different" } } }
-            },
-            { "leaseId": "l-invalid", "result": { "status": "error", "error": "Invalid recordType" } },
-            { "leaseId": "l-metadata", "result": { "status": "down", "error": "target not allowed", "errorType": "TargetNotAllowed" } },
-            { "leaseId": "l-missing", "result": { "status": "error", "error": "Missing host" } },
-            {
-                "leaseId": "l-secret",
-                "result": {
-                    "status": "error",
-                    "error": "passwordEnv HOME is not allowed: the agent only reads variables that start with STATUSTICK_SECRET_",
-                    "errorCode": "SECRET_NOT_ALLOWED"
-                }
-            },
-            { "leaseId": "l-tcp", "result": { "status": "up" } }
-        ])
-    );
-    assert_eq!(connect.headers["authorization"], format!("Bearer {TOKEN}"));
-    assert!(regex::Regex::new(r"^StatusTick-Agent/\d+\.\d+\.\d+").unwrap().is_match(&connect.headers["user-agent"]));
-    assert_eq!(lease.headers["agent-id"], "agt_1");
-    assert_eq!(lease.headers["agent-session"], "ses_1");
+    assert_eq!((lease.headers["agent-id"].as_str(), lease.headers["agent-session"].as_str()), ("agt_1", "ses_1"));
     assert!(lines.contains(&format!("Connected to {} as agt_1 (location \"Office\").", fake.url)), "{lines:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn runs_leased_jobs_and_posts_only_the_documented_result_fields() {
+    let port = target().await;
+    let closed = free_port();
+    let lease = |id: &str, kind: &str, check: Value| json!({ "leaseId": id, "expiresAt": in_one_minute(), "type": kind, "check": check });
+    let list = json!([
+        lease("l-tcp", "tcp", json!({ "host": "127.0.0.1", "port": port })),
+        lease("l-closed", "tcp", json!({ "host": "127.0.0.1", "port": closed, "timeout": 2000 })),
+        lease(
+            "l-http",
+            "http",
+            json!({ "url": format!("http://127.0.0.1:{port}/json"), "expectedText": "ok", "expectedHeaders": { "X-Version": "3" }, "json": [{ "path": "$.count", "equals": 3 }], "timeout": null })
+        ),
+        lease("l-metadata", "http", json!({ "url": "http://169.254.169.254/latest" })),
+        lease("l-missing", "tcp", json!({ "host": "", "port": 1 })),
+        lease("l-invalid", "dns", json!({ "hostname": "example.com", "recordType": "PTR" })),
+        lease("l-browser", "browser", json!({ "script": "x" })),
+        lease("l-secret", "postgres", json!({ "host": "db.internal", "port": 5432, "passwordEnv": "HOME" }))
+    ]);
+    let count = list.as_array().unwrap().len();
+    let fake = Platform::start(vec![
+        ("/v1/connect", Box::new(|_, _| connected(json!({})))),
+        ("/v1/jobs", Box::new(move |_, n| if n == 1 { jobs(list.clone()) } else { Answer::Hang })),
+    ])
+    .await;
+    let mut agent = Agent::start(&[("STATUSTICK_URL", &fake.url), ("STATUSTICK_CONCURRENCY", "10")], &[]);
+    until("all results", 20000, || fake.results().len() == count).await;
+    let results: HashMap<String, Value> =
+        fake.results().into_iter().map(|result| (result["leaseId"].as_str().unwrap().to_string(), normalize(&result["result"]))).collect();
+    agent.stop().await;
+    let expected = [
+        ("l-tcp", "an open port is up", json!({ "status": "up" })),
+        (
+            "l-closed",
+            "a closed port names the refusal",
+            json!({ "status": "down", "error": format!("connect ECONNREFUSED 127.0.0.1:{closed}"), "errorCode": "ECONNREFUSED" }),
+        ),
+        (
+            "l-http",
+            "a header mismatch is down; headers and body stay in the network",
+            json!({ "status": "down", "httpStatus": 200, "details": { "textMatch": true, "headerMismatch": { "name": "X-Version", "reason": "different" } } }),
+        ),
+        ("l-metadata", "cloud metadata is refused", json!({ "status": "down", "error": "target not allowed", "errorType": "TargetNotAllowed" })),
+        ("l-missing", "a job without a host is an error", json!({ "status": "error", "error": "Missing host" })),
+        ("l-invalid", "a record type outside the schema is an error", json!({ "status": "error", "error": "Invalid recordType" })),
+        ("l-browser", "browser jobs need the image", json!({ "status": "error", "error": "Unsupported check type: browser" })),
+        (
+            "l-secret",
+            "a password is read only from STATUSTICK_SECRET_* variables",
+            json!({
+                "status": "error",
+                "error": "passwordEnv HOME is not allowed: the agent only reads variables that start with STATUSTICK_SECRET_",
+                "errorCode": "SECRET_NOT_ALLOWED"
+            }),
+        ),
+    ];
+    for (lease, why, result) in expected {
+        assert_eq!(results[lease], result, "{lease}: {why}");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

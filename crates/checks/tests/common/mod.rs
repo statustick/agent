@@ -96,14 +96,11 @@ pub fn at(value: &Value, path: &str) -> Value {
 /// One check: its name, type, request and the values expected at paths of its result.
 pub type Case<'a> = (&'a str, &'a str, Value, Vec<(&'a str, Value)>);
 
-/// Checks each case and fails once with every mismatch. `ENGINE_DUMP=1` prints each result.
+/// Checks each case and fails once with every mismatch.
 pub fn expect_all(cases: Vec<Case>) {
     let mut failures = Vec::new();
     for (name, kind, request, expected) in cases {
         let result = check(kind, request);
-        if std::env::var_os("ENGINE_DUMP").is_some() {
-            println!("{name}: {result}");
-        }
         for (path, value) in expected {
             let found = at(&result, path);
             if found != value {
@@ -205,11 +202,11 @@ fn start(proxy: bool) -> Fixtures {
                 }
             }
         }),
-        smtp: mail(Mail { greeting: "220 parity ESMTP\r\n", starttls: true, inject: false, imap: false }, false),
-        smtp_no_tls: mail(Mail { greeting: "220 parity ESMTP\r\n", starttls: false, inject: false, imap: false }, false),
+        smtp: mail(Mail { greeting: "220 mail.test ESMTP\r\n", starttls: true, inject: false, imap: false }, false),
+        smtp_no_tls: mail(Mail { greeting: "220 mail.test ESMTP\r\n", starttls: false, inject: false, imap: false }, false),
         smtp_554: mail(Mail { greeting: "554 go away secret-text\r\n", starttls: false, inject: false, imap: false }, false),
-        smtp_inject: mail(Mail { greeting: "220 parity ESMTP\r\n", starttls: true, inject: true, imap: false }, false),
-        smtps: mail(Mail { greeting: "220 parity ESMTP\r\n", starttls: false, inject: false, imap: false }, true),
+        smtp_inject: mail(Mail { greeting: "220 mail.test ESMTP\r\n", starttls: true, inject: true, imap: false }, false),
+        smtps: mail(Mail { greeting: "220 mail.test ESMTP\r\n", starttls: false, inject: false, imap: false }, true),
         imap: mail(Mail { greeting: "* OK [CAPABILITY IMAP4rev1 STARTTLS AUTH=PLAIN] ready\r\n", starttls: true, inject: false, imap: true }, false),
         imap_no_caps: mail(Mail { greeting: "* OK ready\r\n", starttls: true, inject: false, imap: true }, false),
         imap_bye: mail(Mail { greeting: "* BYE overloaded\r\n", starttls: false, inject: false, imap: true }, false),
@@ -348,7 +345,7 @@ fn certificate(subject: &[(&str, &str)], key: &PKey<Private>, issuer: Option<&Pa
 /// self-signed leaf and a leaf of a CA nobody trusts, sent with that CA.
 fn make_certificates() -> HashMap<&'static str, Pair> {
     let mut pairs = HashMap::new();
-    for (name, subject) in [("ca", [("CN", "Parity Test CA"), ("O", "StatusTick Parity")]), ("unknown", [("CN", "Unknown Test CA"), ("O", "Nobody")])] {
+    for (name, subject) in [("ca", [("CN", "Test CA"), ("O", "StatusTick Tests")]), ("unknown", [("CN", "Unknown Test CA"), ("O", "Nobody")])] {
         let key = rsa_key(2048);
         let cert = certificate(&subject, &key, None, None, true, &[]);
         pairs.insert(name, Pair { cert, key, chain: Vec::new() });
@@ -580,7 +577,7 @@ fn mail_answer(script: Mail, line: &str) -> Step {
     }
     let upper = line.to_ascii_uppercase();
     if upper.starts_with("EHLO ") {
-        return Step::Write(format!("250-parity\r\n250-PIPELINING\r\n{}250 8BITMIME\r\n", if script.starttls { "250-STARTTLS\r\n" } else { "" }));
+        return Step::Write(format!("250-mail.test\r\n250-PIPELINING\r\n{}250 8BITMIME\r\n", if script.starttls { "250-STARTTLS\r\n" } else { "" }));
     }
     match upper.as_str() {
         "STARTTLS" => Step::Upgrade(if script.inject { "220 Ready\r\n250 injected\r\n" } else { "220 Ready\r\n" }.to_string()),
@@ -690,7 +687,7 @@ async fn mcp_answer(request: Request<Incoming>) -> Result<Response<Full<Bytes>>,
             "mcp-invalid" => reply(Some(json!({ "protocolVersion": "2025-06-18", "capabilities": {} }))),
             "mcp-old-version" => reply(Some(json!({ "protocolVersion": "1999-01-01", "capabilities": {}, "serverInfo": { "name": "old", "version": "0" } }))),
             _ => reply(Some(
-                json!({ "protocolVersion": "2025-06-18", "capabilities": { "tools": {} }, "serverInfo": { "name": format!("parity-server-{}", "x".repeat(120)), "version": "1.2.3" } }),
+                json!({ "protocolVersion": "2025-06-18", "capabilities": { "tools": {} }, "serverInfo": { "name": format!("test-server-{}", "x".repeat(120)), "version": "1.2.3" } }),
             )),
         },
         "tools/list" => {
