@@ -8,7 +8,8 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use regex::Regex;
-use serde_json::{Map, Value};
+use serde::Serialize;
+use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
@@ -103,21 +104,52 @@ pub async fn connect_tls_io<S: AsyncRead + AsyncWrite + Unpin>(target: &Target, 
     TlsConnector::from(client_config(verify, alpn)).connect(server_name(&target.host, target.address), stream).await
 }
 
+/// The answer of one gRPC, SMTP or IMAP check. [host] and [port] are echoed as sent.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionCheckResult<D> {
+    pub host: Value,
+    pub port: Value,
+    pub status: &'static str,
+    pub response_time: i64,
+    pub timestamp: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<D>,
+}
+
 /// The TLS version and the leaf certificate's expiry of an open connection.
-pub fn tls_details<S>(stream: &TlsStream<S>, details: &mut Map<String, Value>) {
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TlsDetails {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub certificate_expires_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub certificate_days_left: Option<i64>,
+}
+
+impl TlsDetails {
+    pub fn is_empty(&self) -> bool {
+        self.tls_version.is_none() && self.certificate_expires_at.is_none() && self.certificate_days_left.is_none()
+    }
+}
+
+pub fn tls_details<S>(stream: &TlsStream<S>) -> TlsDetails {
     let (_, connection) = stream.get_ref();
-    if let Some(version) = connection.protocol_version().and_then(version_name) {
-        details.insert("tlsVersion".into(), Value::from(version));
-    }
+    let mut details = TlsDetails { tls_version: connection.protocol_version().and_then(version_name), ..TlsDetails::default() };
     let leaf = connection.peer_certificates().and_then(|chain| chain.first());
-    if let Some(Ok((_, certificate))) = leaf.map(|der| X509Certificate::from_der(der)) {
-        let valid_to = certificate.validity().not_after.timestamp();
-        if let Some(time) = chrono::DateTime::from_timestamp(valid_to, 0) {
-            details.insert("certificateExpiresAt".into(), Value::from(iso(time)));
-            let days = ((time.timestamp_millis() - chrono::Utc::now().timestamp_millis()) as f64 / DAY_MS).floor();
-            details.insert("certificateDaysLeft".into(), Value::from(days as i64));
-        }
+    if let Some(Ok((_, certificate))) = leaf.map(|der| X509Certificate::from_der(der))
+        && let Some(time) = chrono::DateTime::from_timestamp(certificate.validity().not_after.timestamp(), 0)
+    {
+        details.certificate_expires_at = Some(iso(time));
+        details.certificate_days_left = Some(((time.timestamp_millis() - chrono::Utc::now().timestamp_millis()) as f64 / DAY_MS).floor() as i64);
     }
+    details
 }
 
 /// CRLF lines of a text protocol, at most MAX_LINE_BYTES each and MAX_LINES per connection.

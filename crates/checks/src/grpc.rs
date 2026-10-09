@@ -3,10 +3,11 @@
 use std::time::Instant;
 
 use bytes::Bytes;
+use serde::Serialize;
 use serde_json::{Map, Value};
 
 use crate::blocking::USER_AGENT;
-use crate::connection::{Stream, Target, connect_plain, connect_tls, failure_of, problem, tls_details, with_deadline};
+use crate::connection::{ConnectionCheckResult, Stream, Target, TlsDetails, connect_plain, connect_tls, failure_of, problem, tls_details, with_deadline};
 use crate::targets::{family_of, is_ipv6_literal, resolve_allowed};
 use crate::tcp::port_of;
 use crate::util::{Failure, elapsed_ms, now_iso, number_field, string_field, timeout_field};
@@ -194,6 +195,17 @@ async fn call(io: std::pin::Pin<Box<dyn Stream>>, target: &Target, tls: bool, se
 }
 
 /// `/check/grpc` and the agent's `grpc` job. Never fails.
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GrpcDetails {
+    #[serde(flatten)]
+    pub tls: TlsDetails,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grpc_status: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub serving_status: Option<&'static str>,
+}
+
 pub async fn grpc_check(request: &Map<String, Value>) -> Value {
     let start = Instant::now();
     let host = request.get("host").cloned().unwrap_or(Value::Null);
@@ -202,28 +214,27 @@ pub async fn grpc_check(request: &Map<String, Value>) -> Value {
     let tls_mode = string_field(request, "tlsMode").unwrap_or_else(|| "NONE".to_string());
     let tls_verify = crate::util::bool_field(request, "tlsVerify").unwrap_or(true);
     let timeout = timeout_field(request, "timeout", 10000.0);
-    let mut details = Map::new();
-    let answer = |status: &str, failure: Option<(String, String)>, details: &Map<String, Value>, response_time: Option<i64>| {
-        let mut result = Map::new();
-        result.insert("host".into(), host.clone());
-        result.insert("port".into(), port_value.clone());
-        result.insert("status".into(), Value::from(status));
-        result.insert("responseTime".into(), Value::from(response_time.unwrap_or_else(|| elapsed_ms(start))));
-        result.insert("timestamp".into(), Value::from(now_iso()));
-        if let Some((error, code)) = failure {
-            result.insert("error".into(), Value::from(error));
-            result.insert("errorCode".into(), Value::from(code));
-        }
-        if !details.is_empty() {
-            result.insert("details".into(), Value::Object(details.clone()));
-        }
-        Value::Object(result)
+    let mut details = GrpcDetails::default();
+    let answer = |status: &'static str, failure: Option<(String, String)>, details: GrpcDetails, response_time: Option<i64>| {
+        let empty = details.tls.is_empty() && details.grpc_status.is_none() && details.serving_status.is_none();
+        let (error, error_code) = failure.unzip();
+        let result = ConnectionCheckResult {
+            host: host.clone(),
+            port: port_value.clone(),
+            status,
+            response_time: response_time.unwrap_or_else(|| elapsed_ms(start)),
+            timestamp: now_iso(),
+            error,
+            error_code,
+            details: (!empty).then_some(details),
+        };
+        serde_json::to_value(result).expect("serializable result")
     };
     if tls_mode != "NONE" && tls_mode != "TLS" {
-        return answer("error", Some(("tlsMode must be NONE or TLS for gRPC".into(), "INVALID_REQUEST".into())), &details, Some(0));
+        return answer("error", Some(("tlsMode must be NONE or TLS for gRPC".into(), "INVALID_REQUEST".into())), details, Some(0));
     }
     if service.encode_utf16().count() > MAX_SERVICE_LENGTH {
-        return answer("error", Some((format!("service is longer than {MAX_SERVICE_LENGTH} characters"), "INVALID_REQUEST".into())), &details, Some(0));
+        return answer("error", Some((format!("service is longer than {MAX_SERVICE_LENGTH} characters"), "INVALID_REQUEST".into())), details, Some(0));
     }
     let timeout_ms = number_field(request, "timeout").map(|value| value as u128).unwrap_or(timeout.as_millis());
     let host_text = host.as_str().unwrap_or("").to_string();
@@ -236,7 +247,7 @@ pub async fn grpc_check(request: &Map<String, Value>) -> Value {
             if stream.get_ref().1.alpn_protocol() != Some(b"h2") {
                 return Err(problem("The server does not speak HTTP/2 over TLS (no ALPN h2)", "GRPC_INVALID_ANSWER"));
             }
-            tls_details(&stream, &mut details);
+            details.tls = tls_details(&stream);
             Box::pin(stream)
         } else {
             Box::pin(plain)
@@ -247,27 +258,27 @@ pub async fn grpc_check(request: &Map<String, Value>) -> Value {
     .await;
     let reply = match outcome {
         Ok(reply) => reply,
-        Err(failure) => return answer("down", Some(failure_of(&failure)), &details, None),
+        Err(failure) => return answer("down", Some(failure_of(&failure)), details, None),
     };
     if reply.http_status != 200 {
-        return answer("down", Some((format!("The server answered HTTP {}, not gRPC", reply.http_status), "GRPC_INVALID_ANSWER".into())), &details, None);
+        return answer("down", Some((format!("The server answered HTTP {}, not gRPC", reply.http_status), "GRPC_INVALID_ANSWER".into())), details, None);
     }
     let Some(grpc_status) = reply.grpc_status.and_then(|status| status.trim().parse::<u64>().ok()) else {
-        return answer("down", Some(("The server sent no gRPC status".into(), "GRPC_INVALID_ANSWER".into())), &details, None);
+        return answer("down", Some(("The server sent no gRPC status".into(), "GRPC_INVALID_ANSWER".into())), details, None);
     };
-    details.insert("grpcStatus".into(), Value::from(grpc_status));
+    details.grpc_status = Some(grpc_status);
     if grpc_status != 0 {
-        return answer("down", Some((status_error(grpc_status, &service), "GRPC_STATUS".into())), &details, None);
+        return answer("down", Some((status_error(grpc_status, &service), "GRPC_STATUS".into())), details, None);
     }
     let serving = match serving_status_of(&reply.frame) {
         Ok(status) => SERVING_STATUSES.get(status as usize).copied().unwrap_or("UNKNOWN"),
-        Err(failure) => return answer("down", Some(failure_of(&failure)), &details, None),
+        Err(failure) => return answer("down", Some(failure_of(&failure)), details, None),
     };
-    details.insert("servingStatus".into(), Value::from(serving));
+    details.serving_status = Some(serving);
     if serving != "SERVING" {
-        return answer("down", Some((format!("Health status {serving}"), "GRPC_NOT_SERVING".into())), &details, None);
+        return answer("down", Some((format!("Health status {serving}"), "GRPC_NOT_SERVING".into())), details, None);
     }
-    answer("up", None, &details, None)
+    answer("up", None, details, None)
 }
 
 #[cfg(test)]

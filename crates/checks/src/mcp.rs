@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use regex::Regex;
+use serde::Serialize;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use url::Url;
@@ -420,8 +421,42 @@ impl EventParser {
     }
 }
 
-fn cut(text: Option<&Value>) -> Option<Value> {
-    text.and_then(Value::as_str).map(|text| Value::from(utf16_prefix(text, MAX_NAME_LENGTH)))
+fn cut(text: Option<&Value>) -> Option<String> {
+    text.and_then(Value::as_str).map(|text| utf16_prefix(text, MAX_NAME_LENGTH).to_string())
+}
+
+/// The answer of one MCP check. [url] is echoed as sent.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpCheckResult {
+    pub url: Value,
+    pub status: &'static str,
+    pub response_time: i64,
+    pub timestamp: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<McpDetails>,
+}
+
+/// What initialize found, and after a complete tools/list the tools; set once initialize succeeded.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpDetails {
+    pub protocol_version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_version: Option<String>,
+    pub initialize_time: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools_list_time: Option<i64>,
 }
 
 /// `/check/mcp` and the agent's `mcp` job. Never fails.
@@ -429,20 +464,18 @@ pub async fn mcp_check(request: &Map<String, Value>) -> Value {
     let start = Instant::now();
     let url = request.get("url").cloned().unwrap_or(Value::Null);
     let timeout = timeout_field(request, "timeout", 10000.0);
-    let answer = |status: &str, details: Option<&Map<String, Value>>, failure: Option<(String, String)>, response_time: Option<i64>| {
-        let mut result = Map::new();
-        result.insert("url".into(), url.clone());
-        result.insert("status".into(), Value::from(status));
-        result.insert("responseTime".into(), Value::from(response_time.unwrap_or_else(|| elapsed_ms(start))));
-        result.insert("timestamp".into(), Value::from(now_iso()));
-        if let Some((error, code)) = failure {
-            result.insert("error".into(), Value::from(error));
-            result.insert("errorCode".into(), Value::from(code));
-        }
-        if let Some(details) = details {
-            result.insert("details".into(), Value::Object(details.clone()));
-        }
-        Value::Object(result)
+    let answer = |status: &'static str, details: Option<McpDetails>, failure: Option<(String, String)>, response_time: Option<i64>| {
+        let (error, error_code) = failure.unzip();
+        let result = McpCheckResult {
+            url: url.clone(),
+            status,
+            response_time: response_time.unwrap_or_else(|| elapsed_ms(start)),
+            timestamp: now_iso(),
+            error,
+            error_code,
+            details,
+        };
+        serde_json::to_value(result).expect("serializable result")
     };
     if let Some(problem) = request_problem(request) {
         return answer("error", None, Some(problem), Some(0));
@@ -456,7 +489,7 @@ pub async fn mcp_check(request: &Map<String, Value>) -> Value {
         next_id: 0,
     };
     let mut phase = Phase::Initialize;
-    let mut details: Option<Map<String, Value>> = None;
+    let mut details: Option<McpDetails> = None;
     let deadline = tokio::time::Instant::now() + timeout;
     let outcome: Result<(), Problem> = async {
         let work = async {
@@ -472,16 +505,15 @@ pub async fn mcp_check(request: &Map<String, Value>) -> Value {
             }
             session.protocol_version = Some(version.clone());
             session.notify("notifications/initialized", Phase::Initialize).await?;
-            let mut found = Map::new();
-            found.insert("protocolVersion".into(), Value::from(version));
-            if let Some(name) = cut(result["serverInfo"].get("name")) {
-                found.insert("serverName".into(), name);
-            }
-            if let Some(server_version) = cut(result["serverInfo"].get("version")) {
-                found.insert("serverVersion".into(), server_version);
-            }
-            found.insert("initializeTime".into(), Value::from(elapsed_ms(initialize_start)));
-            details = Some(found);
+            details = Some(McpDetails {
+                protocol_version: version,
+                server_name: cut(result["serverInfo"].get("name")),
+                server_version: cut(result["serverInfo"].get("version")),
+                initialize_time: elapsed_ms(initialize_start),
+                tool_count: None,
+                tools_hash: None,
+                tools_list_time: None,
+            });
 
             phase = Phase::ToolsList;
             let list_start = Instant::now();
@@ -510,9 +542,9 @@ pub async fn mcp_check(request: &Map<String, Value>) -> Value {
                 cursor = Some(next);
             }
             if let Some(found) = details.as_mut() {
-                found.insert("toolCount".into(), Value::from(tools.len()));
-                found.insert("toolsHash".into(), Value::from(tools_hash(&tools)));
-                found.insert("toolsListTime".into(), Value::from(elapsed_ms(list_start)));
+                found.tool_count = Some(tools.len());
+                found.tools_hash = Some(tools_hash(&tools));
+                found.tools_list_time = Some(elapsed_ms(list_start));
             }
             if tools.is_empty() {
                 return Err(Problem::Own("The MCP server lists no tools".into(), "MCP_NO_TOOLS".into()));
@@ -545,8 +577,8 @@ pub async fn mcp_check(request: &Map<String, Value>) -> Value {
         });
     }
     match outcome {
-        Ok(()) => answer("up", details.as_ref(), None, None),
-        Err(problem) => answer("down", details.as_ref(), Some(failure_of(problem, phase)), None),
+        Ok(()) => answer("up", details, None, None),
+        Err(problem) => answer("down", details, Some(failure_of(problem, phase)), None),
     }
 }
 
