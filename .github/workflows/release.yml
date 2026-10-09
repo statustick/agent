@@ -3,6 +3,11 @@ name: Release
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Publish the image of this released agent version again (X.Y.Z)
+        required: true
 
 concurrency:
   group: release
@@ -13,6 +18,7 @@ permissions:
 
 jobs:
   release-please:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -33,7 +39,7 @@ jobs:
 
   image:
     needs: release-please
-    if: needs.release-please.outputs.agent == 'true'
+    if: always() && (needs.release-please.outputs.agent == 'true' || inputs.version != '')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -42,9 +48,11 @@ jobs:
       id-token: write
     env:
       IMAGE: ${{ vars.AGENT_IMAGE || 'ghcr.io/statustick/agent' }}
-      VERSION: ${{ needs.release-please.outputs.agent-version }}
+      VERSION: ${{ inputs.version || needs.release-please.outputs.agent-version }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: agent-v${{ inputs.version || needs.release-please.outputs.agent-version }}
       - name: Check that the release matches version.txt
         run: '[ "$(cat version.txt)" = "$VERSION" ] || { echo "version.txt is not $VERSION"; exit 1; }'
       - uses: docker/setup-qemu-action@v3
@@ -59,7 +67,7 @@ jobs:
           cache-from: type=gha,scope=agent-image
       - run: scripts/agent-isolation.sh agent-scan:ci
       - name: Scan the image
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: agent-scan:ci
           severity: CRITICAL

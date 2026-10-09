@@ -10,8 +10,6 @@ Releases are made by release-please (see "Release" in the README); nobody pushes
 - builds the static binaries and attaches `statustick-agent-linux-amd64.tar.gz`, `statustick-agent-linux-arm64.tar.gz` and `SHA256SUMS` to the GitHub release;
 - for a chart release (`chart-vX.Y.Z`), pushes the chart to `oci://ghcr.io/statustick/charts` (repository variable `CHART_REGISTRY`).
 
-The first public release is forced to 1.0.0 with `release-as` in `release-please-config.json`; remove both `release-as` lines in the next pull request after it.
-
 ## Heartbeat relay: platform contract (agent protocol v1)
 
 What StatusTick implements for the relay (the whole protocol: [agent-protocol.md](agent-protocol.md)):

@@ -21,7 +21,6 @@
       "release-type": "simple",
       "component": "agent",
       "package-name": "statustick-agent",
-      "release-as": "1.0.0",
       "changelog-path": "CHANGELOG.md",
       "exclude-paths": ["charts"],
       "extra-files": [{ "type": "generic", "path": "charts/statustick-agent/Chart.yaml" }]
@@ -29,8 +28,7 @@
     "charts/statustick-agent": {
       "release-type": "helm",
       "component": "chart",
-      "package-name": "statustick-agent",
-      "release-as": "1.0.0"
+      "package-name": "statustick-agent"
     }
   }
 }
