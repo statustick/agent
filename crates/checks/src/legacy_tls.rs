@@ -1,6 +1,6 @@
 //! A second TLS attempt over OpenSSL, after rustls found no TLS version or cipher in common with a server: servers
-//! that offer only TLS 1.0 or 1.1, or only CBC ciphers. It offers Node.js's default
-//! ciphers at security level 0, from TLS 1.0 up. A weak certificate key (RSA or DSA under 2048 bits) passes only on a
+//! that offer only TLS 1.0 or 1.1, or only CBC ciphers. It offers the common
+//! cipher list at OpenSSL security level 0, from TLS 1.0 up. A weak certificate key (RSA or DSA under 2048 bits) passes only on a
 //! legacy connection, flagged; a modern connection with one fails.
 use std::net::IpAddr;
 
@@ -20,8 +20,8 @@ use crate::targets::{Family, resolve_allowed};
 use crate::tls::{LegacyTls, check_server_identity, verify_chain};
 use crate::util::Failure;
 
-/// Node.js's `tls.DEFAULT_CIPHERS` at OpenSSL security level 0.
-const NODE_CIPHERS: &str = "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256:ECDHE-RSA-AES128-GCM-SHA256:\
+/// The usual default cipher list, used at OpenSSL security level 0.
+const LEGACY_CIPHERS: &str = "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256:ECDHE-RSA-AES128-GCM-SHA256:\
 ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES256-GCM-SHA384:DHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-SHA256:\
 DHE-RSA-AES128-SHA256:ECDHE-RSA-AES256-SHA384:DHE-RSA-AES256-SHA384:ECDHE-RSA-AES256-SHA256:DHE-RSA-AES256-SHA256:HIGH:!aNULL:!eNULL:!EXPORT:\
 !DES:!RC4:!MD5:!PSK:!SRP:!CAMELLIA:@SECLEVEL=0";
@@ -105,7 +105,7 @@ async fn handshake(host: &str, address: IpAddr, port: u16, alpn: bool) -> Option
     let tcp = TcpStream::connect((address, port)).await.ok()?;
     let mut builder = SslConnector::builder(SslMethod::tls_client()).ok()?;
     builder.set_min_proto_version(Some(SslVersion::TLS1)).ok()?;
-    builder.set_cipher_list(NODE_CIPHERS).ok()?;
+    builder.set_cipher_list(LEGACY_CIPHERS).ok()?;
     builder.set_verify(SslVerifyMode::NONE);
     if alpn {
         builder.set_alpn_protos(b"\x08http/1.1").ok()?;

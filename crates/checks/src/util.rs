@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use serde_json::{Map, Value};
 
-/// A failure as StatusTick expects it: the message, the Node.js-style code and the error name.
+/// A check failure: the message, an error code (`ECONNREFUSED`, `ENOTFOUND`, …) and the error name StatusTick reports.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Failure {
     pub message: String,
@@ -16,7 +16,6 @@ impl Failure {
         Failure { message: message.into(), code: code.map(str::to_string), name: name.to_string() }
     }
 
-    /// A plain `Error` with a code, as Node.js system errors are.
     pub fn coded(message: impl Into<String>, code: &str) -> Self {
         Failure::new(message, Some(code), "Error")
     }
@@ -38,7 +37,7 @@ impl fmt::Display for Failure {
 
 impl std::error::Error for Failure {}
 
-/// `new Date().toISOString()`.
+/// Now in UTC, ISO 8601 with milliseconds.
 pub fn now_iso() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
 }
@@ -47,12 +46,12 @@ pub fn iso(time: chrono::DateTime<chrono::Utc>) -> String {
     time.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
 }
 
-/// `Math.round(performance.now() - start)`.
+/// Whole milliseconds since [start].
 pub fn elapsed_ms(start: Instant) -> i64 {
     (start.elapsed().as_secs_f64() * 1000.0).round() as i64
 }
 
-/// The errno names Node.js puts in `error.code`.
+/// The errno name StatusTick reports as an error code.
 pub fn errno_name(errno: i32) -> Option<&'static str> {
     let names: &[(i32, &str)] = &[
         (libc::ECONNREFUSED, "ECONNREFUSED"),
@@ -77,7 +76,7 @@ pub fn errno_name(errno: i32) -> Option<&'static str> {
     names.iter().find(|(number, _)| *number == errno).map(|(_, name)| *name)
 }
 
-/// The code of an I/O error as Node.js names it.
+/// The error code of an I/O error, `EIO` when it has no errno name.
 pub fn io_code(error: &std::io::Error) -> String {
     if let Some(name) = error.raw_os_error().and_then(errno_name) {
         return name.to_string();
@@ -96,13 +95,13 @@ pub fn io_code(error: &std::io::Error) -> String {
     .to_string()
 }
 
-/// `connect ECONNREFUSED 127.0.0.1:443`, the message of a failed Node.js connect.
+/// `connect ECONNREFUSED 127.0.0.1:443`.
 pub fn connect_failure(error: &std::io::Error, address: std::net::IpAddr, port: u16) -> Failure {
     let code = io_code(error);
     Failure::coded(format!("connect {code} {address}:{port}"), &code)
 }
 
-/// JavaScript truthiness of a JSON value; absent is falsy.
+/// Whether a request field is set: absent, null, false, 0 and "" are not.
 pub fn truthy(value: Option<&Value>) -> bool {
     match value {
         None | Some(Value::Null) => false,
@@ -113,17 +112,17 @@ pub fn truthy(value: Option<&Value>) -> bool {
     }
 }
 
-/// A field as a string; numbers are written as JavaScript would.
+/// A field as a string; a number is written in its shortest form.
 pub fn string_field(request: &Map<String, Value>, name: &str) -> Option<String> {
     match request.get(name)? {
         Value::String(text) => Some(text.clone()),
-        Value::Number(number) => Some(js_number(number.as_f64().unwrap_or(0.0))),
+        Value::Number(number) => Some(number_text(number.as_f64().unwrap_or(0.0))),
         Value::Bool(flag) => Some(flag.to_string()),
         _ => None,
     }
 }
 
-/// A field as a number, as JavaScript coerces a numeric string.
+/// A field as a number; a numeric string counts.
 pub fn number_field(request: &Map<String, Value>, name: &str) -> Option<f64> {
     match request.get(name)? {
         Value::Number(number) => number.as_f64(),
@@ -140,7 +139,7 @@ pub fn bool_field(request: &Map<String, Value>, name: &str) -> Option<bool> {
     }
 }
 
-/// A timeout in milliseconds with its default; JavaScript timers treat a negative or missing delay as 1 ms.
+/// A timeout in milliseconds with its default; anything under 1 ms is 1 ms.
 pub fn timeout_field(request: &Map<String, Value>, name: &str, default: f64) -> std::time::Duration {
     let value = match request.get(name) {
         None | Some(Value::Null) => default,
@@ -149,8 +148,8 @@ pub fn timeout_field(request: &Map<String, Value>, name: &str, default: f64) -> 
     std::time::Duration::from_millis(if value.is_finite() && value >= 1.0 { value as u64 } else { 1 })
 }
 
-/// `String(number)` for a finite number.
-pub fn js_number(value: f64) -> String {
+/// The shortest text of a number: `1`, `0.5`, `1e+21`. StatusTick compares these texts.
+pub fn number_text(value: f64) -> String {
     if value.is_nan() {
         return "NaN".to_string();
     }
@@ -164,7 +163,7 @@ pub fn js_number(value: f64) -> String {
     buffer.format(value).to_string()
 }
 
-/// The first [units] UTF-16 code units of [text], as `String.prototype.slice(0, units)` keeps them.
+/// The first [units] UTF-16 code units of [text]; StatusTick limits lengths in UTF-16 units.
 pub fn utf16_prefix(text: &str, units: usize) -> &str {
     let mut count = 0;
     for (index, character) in text.char_indices() {
@@ -176,12 +175,12 @@ pub fn utf16_prefix(text: &str, units: usize) -> &str {
     text
 }
 
-/// JavaScript's `<` on strings: UTF-16 code unit order.
-pub fn utf16_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+/// UTF-16 code unit order, the order StatusTick sorts names in.
+pub fn utf16_order(a: &str, b: &str) -> std::cmp::Ordering {
     a.encode_utf16().cmp(b.encode_utf16())
 }
 
-/// Builds a JSON object from pairs, leaving out `None` values as `JSON.stringify` leaves out `undefined`.
+/// A JSON object from pairs, without the `None` values.
 pub fn object(pairs: Vec<(&str, Option<Value>)>) -> Value {
     let mut map = Map::new();
     for (key, value) in pairs {

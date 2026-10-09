@@ -1,5 +1,5 @@
 //! TLS for every check: the trust store (Mozilla's roots plus `NODE_EXTRA_CA_CERTS`), chain verification with the
-//! OpenSSL error codes StatusTick expects, Node.js's host name rules, and certificate descriptions.
+//! OpenSSL error codes StatusTick expects, host name matching, and certificate descriptions.
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::{Arc, LazyLock};
@@ -11,21 +11,21 @@ use rustls::{ClientConfig, DigitallySignedStruct, SignatureScheme};
 use x509_parser::extensions::GeneralName;
 use x509_parser::prelude::{FromDer, X509Certificate};
 
-/// A verification failure as Node.js reports it: an OpenSSL code such as `DEPTH_ZERO_SELF_SIGNED_CERT` and its text,
+/// A verification failure: an OpenSSL code such as `DEPTH_ZERO_SELF_SIGNED_CERT` and its text,
 /// or `ERR_TLS_CERT_ALTNAME_INVALID` for a host name mismatch.
 #[derive(Debug, Clone)]
-pub struct NodeTLSError {
+pub struct VerifyError {
     pub code: String,
     pub message: String,
 }
 
-impl std::fmt::Display for NodeTLSError {
+impl std::fmt::Display for VerifyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.message)
     }
 }
 
-impl std::error::Error for NodeTLSError {}
+impl std::error::Error for VerifyError {}
 
 pub fn provider() -> Arc<CryptoProvider> {
     static PROVIDER: LazyLock<Arc<CryptoProvider>> = LazyLock::new(|| Arc::new(rustls::crypto::ring::default_provider()));
@@ -47,7 +47,7 @@ fn pem_certificates(text: &str) -> Vec<CertificateDer<'static>> {
     CertificateDer::pem_slice_iter(text.as_bytes()).filter_map(Result::ok).collect()
 }
 
-/// Mozilla's roots and the PEM file in `NODE_EXTRA_CA_CERTS`, as Node.js trusts them.
+/// Mozilla's roots plus the PEM file in `NODE_EXTRA_CA_CERTS`, the variable customers already set for this.
 pub fn trust_store() -> &'static TrustStore {
     static STORE: LazyLock<TrustStore> = LazyLock::new(|| {
         let mut certificates: Vec<CertificateDer<'static>> = webpki_root_certs::TLS_SERVER_ROOT_CERTS.to_vec();
@@ -95,8 +95,7 @@ fn issued_by(certificate: &X509Certificate<'_>, issuer: &X509Certificate<'_>) ->
     certificate.issuer().as_raw() == issuer.subject().as_raw() && certificate.verify_signature(Some(issuer.public_key())).is_ok()
 }
 
-/// The certificates from the leaf up, as Node.js's `getPeerCertificate(true)` follows `issuerCertificate`: issuers the
-/// server sent, then one from the trust store.
+/// The certificates from the leaf up: the issuers the server sent, then one from the trust store.
 pub fn peer_chain(presented: &[CertificateDer<'static>]) -> Vec<CertificateDer<'static>> {
     let parsed: Vec<Option<X509Certificate<'_>>> = presented.iter().map(|der| X509Certificate::from_der(der).ok().map(|(_, cert)| cert)).collect();
     let mut chain: Vec<CertificateDer<'static>> = Vec::new();
@@ -143,7 +142,7 @@ pub fn openssl_message(code: &str) -> &'static str {
     }
 }
 
-/// Verifies [presented] (leaf first) against the trust store; the error is the OpenSSL code Node.js reports.
+/// Verifies [presented] (leaf first) against the trust store; the error is the OpenSSL code.
 pub fn verify_chain(presented: &[CertificateDer<'static>]) -> Result<(), String> {
     let store = trust_store();
     let Some(leaf) = presented.first() else {
@@ -237,7 +236,7 @@ fn split_host(host: &str) -> Vec<String> {
     host.to_lowercase().trim_end_matches('.').split('.').map(str::to_string).collect()
 }
 
-/// Node.js's `check` in `tls.checkServerIdentity`.
+/// One name against one certificate pattern; [wildcards] allows `*` in the left-most label.
 fn name_matches(host_parts: &[String], pattern: &str, wildcards: bool) -> bool {
     if pattern.is_empty() {
         return false;
@@ -271,7 +270,7 @@ fn canonical_ip(text: &str) -> Option<IpAddr> {
     text.parse().ok()
 }
 
-/// `tls.checkServerIdentity(host, cert)`: None when [host] matches, else Node.js's reason after
+/// None when [certificate] names [host], else the reason that follows
 /// "Hostname/IP does not match certificate's altnames: ".
 pub fn check_server_identity(host: &str, certificate: &X509Certificate<'_>) -> Option<String> {
     let alt_names = subject_alt_name(certificate);
@@ -310,7 +309,7 @@ pub fn check_server_identity(host: &str, certificate: &X509Certificate<'_>) -> O
     Some("Cert does not contain a DNS name".to_string())
 }
 
-/// Accepts what Node.js accepts: with [verify] the chain must lead to a trusted root and the certificate must name the
+/// With [verify] the chain must lead to a trusted root and the certificate must name the
 /// host; without it any certificate. Handshake signatures are always checked.
 #[derive(Debug)]
 pub struct NodeVerifier {
@@ -332,7 +331,7 @@ impl ServerCertVerifier for NodeVerifier {
         let mut presented = vec![end_entity.clone().into_owned()];
         presented.extend(intermediates.iter().map(|certificate| certificate.clone().into_owned()));
         let refuse = |code: String, message: String| {
-            rustls::Error::InvalidCertificate(rustls::CertificateError::Other(rustls::OtherError(Arc::new(NodeTLSError { code, message }))))
+            rustls::Error::InvalidCertificate(rustls::CertificateError::Other(rustls::OtherError(Arc::new(VerifyError { code, message }))))
         };
         if let Err(code) = verify_chain(&presented) {
             let message = openssl_message(&code).to_string();
@@ -375,7 +374,7 @@ pub fn client_config(verify: bool, alpn: &[&str]) -> Arc<ClientConfig> {
     Arc::new(config)
 }
 
-/// The SNI name for [host]; an IP literal sends none, as Node.js leaves `servername` out for it.
+/// The SNI name for [host]; an IP literal sends none.
 pub fn server_name(host: &str, address: IpAddr) -> ServerName<'static> {
     let bare = host.trim_start_matches('[').trim_end_matches(']');
     match bare.parse::<IpAddr>() {
@@ -394,17 +393,17 @@ pub fn version_name(version: rustls::ProtocolVersion) -> Option<String> {
     }
 }
 
-/// The Node.js failure for a TLS error: a verification code with its text, or the error itself.
-pub fn node_error(error: &(dyn std::error::Error + 'static)) -> Option<NodeTLSError> {
+/// The verification failure inside a TLS error, if it is one.
+pub fn verify_error(error: &(dyn std::error::Error + 'static)) -> Option<VerifyError> {
     let mut current: Option<&(dyn std::error::Error + 'static)> = Some(error);
     while let Some(error) = current {
-        if let Some(node) = error.downcast_ref::<NodeTLSError>() {
-            return Some(node.clone());
+        if let Some(failure) = error.downcast_ref::<VerifyError>() {
+            return Some(failure.clone());
         }
         if let Some(rustls::Error::InvalidCertificate(rustls::CertificateError::Other(other))) = error.downcast_ref::<rustls::Error>()
-            && let Some(node) = other.0.downcast_ref::<NodeTLSError>()
+            && let Some(failure) = other.0.downcast_ref::<VerifyError>()
         {
-            return Some(node.clone());
+            return Some(failure.clone());
         }
         current = error.source();
     }

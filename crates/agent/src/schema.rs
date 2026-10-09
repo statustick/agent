@@ -12,6 +12,7 @@ enum Field {
     IpVersion,
     Assets,
     JsonAssertions,
+    Method,
     OneOf(&'static [&'static str]),
 }
 
@@ -49,7 +50,7 @@ fn schema(kind: &str) -> Option<Vec<(&'static str, Field)>> {
     Some(match kind {
         "http" => vec![
             ("url", Text),
-            ("method", OneOf(HTTP_METHODS)),
+            ("method", Method),
             ("timeout", Number),
             ("expectedStatus", Number),
             ("expectedText", Text),
@@ -115,10 +116,8 @@ fn json_assertion(value: &Value) -> bool {
 
 fn fits(field: Field, value: &Value) -> bool {
     match field {
-        OneOf(values) => {
-            let Some(text) = value.as_str() else { return false };
-            if std::ptr::eq(values, HTTP_METHODS) { values.contains(&text.to_uppercase().as_str()) } else { values.contains(&text) }
-        }
+        Method => value.as_str().is_some_and(|text| HTTP_METHODS.contains(&text.to_uppercase().as_str())),
+        OneOf(values) => value.as_str().is_some_and(|text| values.contains(&text)),
         Text => value.is_string(),
         Number => value.as_f64().is_some_and(f64::is_finite),
         Boolean => value.is_boolean(),
@@ -247,7 +246,7 @@ pub fn only_documented_fields(kind: &str, result: &Map<String, Value>) -> Map<St
 pub fn header_mismatch(expected: &Map<String, Value>, actual: &Map<String, Value>) -> Value {
     let lower: Vec<(String, &Value)> = actual.iter().map(|(name, value)| (name.to_lowercase(), value)).collect();
     for (name, value) in expected {
-        // A later duplicate name wins, as Map construction does in JavaScript.
+        // A later duplicate header name wins.
         match lower.iter().rev().find(|(candidate, _)| *candidate == name.to_lowercase()) {
             None => return json!({ "name": name, "reason": "missing" }),
             Some((_, found)) if *found != value => return json!({ "name": name, "reason": "different" }),

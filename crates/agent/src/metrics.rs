@@ -62,7 +62,7 @@ pub struct AgentMetrics {
 }
 
 fn number(value: f64) -> String {
-    statustick_checks::util::js_number(value)
+    statustick_checks::util::number_text(value)
 }
 
 fn cpu_seconds() -> (f64, f64) {

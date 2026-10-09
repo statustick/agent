@@ -185,7 +185,7 @@ fn issuer_of(chain: &[CertificateDer<'static>]) -> String {
     if parts.is_empty() { "an unnamed issuer".into() } else { parts.join(", ") }
 }
 
-/// The chain and the reason Node.js would not trust it, or None when it would.
+/// The chain and the reason it is not trusted, or None when it is.
 fn authorization(chain: &[CertificateDer<'static>], host: &str) -> Option<String> {
     if let Err(code) = verify_chain(chain) {
         return Some(code);
@@ -382,15 +382,15 @@ async fn call_failure(error: &reqwest::Error, url: &str, proxy: Option<&url::Url
             reason = io_reason(io);
             break;
         }
-        if let Some(node) = statustick_checks::tls::node_error(inner) {
-            reason = node.code;
+        if let Some(failure) = statustick_checks::tls::verify_error(inner) {
+            reason = failure.code;
             break;
         }
         reason = inner.to_string();
         current = inner.source();
     }
     if error.is_timeout() {
-        reason = "The operation was aborted due to timeout".into();
+        reason = "Timed out".into();
     }
     (reason, status)
 }

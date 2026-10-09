@@ -63,7 +63,9 @@ pub fn check_json(body: &str, assertions: &[Value]) -> Option<String> {
         return Some(format!("The response is not JSON, so {first} cannot be checked"));
     };
     for assertion in assertions {
-        let path = path_of(assertion).unwrap_or_else(|| "undefined".to_string());
+        let Some(path) = path_of(assertion) else {
+            return Some("A JSON assertion has no path".into());
+        };
         if !valid_json_path(&path) {
             return Some(format!("JSON path {path} is not valid"));
         }

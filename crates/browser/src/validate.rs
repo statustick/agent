@@ -12,7 +12,7 @@ const MAX_HOSTS: usize = 20;
 const MAX_URL_CHARS: usize = 2048;
 pub const MAX_STEP_CHARS: usize = 1000;
 
-/// Node.js's `builtinModules`.
+/// The modules Node.js ships, which a script may import.
 const BUILTINS: &[&str] = &[
     "_http_agent",
     "_http_client",
@@ -177,15 +177,14 @@ pub fn validate_variables(variables: Option<&Value>) -> Result<Map<String, Value
     Ok(checked)
 }
 
-/// `String(value)` in JavaScript, for messages that quote what was sent.
-pub fn js_string(value: &Value) -> String {
+/// A value as text for messages that quote what was sent; objects and arrays as JSON.
+pub fn display_text(value: &Value) -> String {
     match value {
         Value::String(text) => text.clone(),
         Value::Null => "null".into(),
         Value::Bool(flag) => flag.to_string(),
-        Value::Number(number) => number.as_f64().map(statustick_checks::util::js_number).unwrap_or_else(|| number.to_string()),
-        Value::Array(items) => items.iter().map(|item| if item.is_null() { String::new() } else { js_string(item) }).collect::<Vec<_>>().join(","),
-        Value::Object(_) => "[object Object]".into(),
+        Value::Number(number) => number.as_f64().map(statustick_checks::util::number_text).unwrap_or_else(|| number.to_string()),
+        Value::Array(_) | Value::Object(_) => value.to_string(),
     }
 }
 
@@ -215,7 +214,7 @@ pub fn validate_allowed_hosts(hosts: Option<&Value>) -> Result<Vec<String>, Scri
             if host == "*" || host_name(&host) || host.parse::<std::net::IpAddr>().is_ok() {
                 Ok(host)
             } else {
-                refuse(format!("'{}' is not a host name. Use example.com, *.example.com or *.", js_string(entry)))
+                refuse(format!("'{}' is not a host name. Use example.com, *.example.com or *.", display_text(entry)))
             }
         })
         .collect()

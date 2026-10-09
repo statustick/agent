@@ -1,5 +1,5 @@
-//! PostgreSQL: our own TCP connection, TLS with Node.js's verification, and the read-only query in a transaction that
-//! is rolled back. Values come back as the JavaScript driver gives them: int8 and numeric as text, json as objects.
+//! PostgreSQL: our own TCP connection, verified TLS, and the read-only query in a transaction that
+//! is rolled back. Values: int8 and numeric as text, json as objects.
 use std::time::Instant;
 
 use serde_json::Value;

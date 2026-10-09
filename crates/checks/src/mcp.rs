@@ -14,7 +14,7 @@ use crate::blocking::with_user_agent;
 use crate::http::{MAX_RESPONSE_BYTES, client_for};
 use crate::proxy::{forward_refused, refusal, refused};
 use crate::targets::resolve_allowed;
-use crate::util::{Failure, elapsed_ms, js_number, now_iso, string_field, timeout_field, utf16_cmp, utf16_prefix};
+use crate::util::{Failure, elapsed_ms, now_iso, number_text, string_field, timeout_field, utf16_order, utf16_prefix};
 
 pub const MAX_TOOL_PAGES: usize = 20;
 const MAX_NAME_LENGTH: usize = 100;
@@ -121,13 +121,13 @@ fn request_problem(request: &Map<String, Value>) -> Option<(String, String)> {
     None
 }
 
-/// `JSON.stringify` of one value with object keys sorted and no white space; arrays keep their order.
+/// One value as JSON with object keys sorted and no white space; arrays keep their order. StatusTick hashes the same form.
 pub fn canonical_json(value: &Value) -> String {
     match value {
         Value::Array(items) => format!("[{}]", items.iter().map(canonical_json).collect::<Vec<_>>().join(",")),
         Value::Object(fields) => {
             let mut entries: Vec<(&String, &Value)> = fields.iter().collect();
-            entries.sort_by(|(a, _), (b, _)| utf16_cmp(a, b));
+            entries.sort_by(|(a, _), (b, _)| utf16_order(a, b));
             let parts: Vec<String> =
                 entries.iter().map(|(key, item)| format!("{}:{}", serde_json::to_string(key).unwrap_or_default(), canonical_json(item))).collect();
             format!("{{{}}}", parts.join(","))
@@ -137,7 +137,7 @@ pub fn canonical_json(value: &Value) -> String {
                 if float == 0.0 {
                     "0".to_string()
                 } else {
-                    js_number(float)
+                    number_text(float)
                 }
             }
             _ => "null".to_string(),
@@ -150,7 +150,7 @@ pub fn canonical_json(value: &Value) -> String {
 pub fn tools_hash(tools: &[(String, Value)]) -> String {
     let mut entries: Vec<(&String, String)> =
         tools.iter().map(|(name, schema)| (name, canonical_json(&json!({ "inputSchema": schema, "name": name })))).collect();
-    entries.sort_by(|(a_name, a_json), (b_name, b_json)| utf16_cmp(a_name, b_name).then_with(|| utf16_cmp(a_json, b_json)));
+    entries.sort_by(|(a_name, a_json), (b_name, b_json)| utf16_order(a_name, b_name).then_with(|| utf16_order(a_json, b_json)));
     let text = format!("[{}]", entries.iter().map(|(_, json)| json.as_str()).collect::<Vec<_>>().join(","));
     hex::encode(Sha256::digest(text.as_bytes()))
 }
@@ -193,10 +193,10 @@ fn valid_tools_list(result: &Value) -> bool {
     result.get("tools").and_then(Value::as_array).is_some_and(|tools| tools.iter().all(valid_tool)) && result.get("nextCursor").is_none_or(Value::is_string)
 }
 
-/// A fetch failure with the connection's own error, as the root cause of Node.js's `fetch failed` reads.
+/// A fetch failure with the connection's own error as its message.
 fn fetch_failure(error: &reqwest::Error, address: std::net::IpAddr, port: u16) -> Failure {
-    if let Some(node) = crate::tls::node_error(error) {
-        return Failure::coded(node.message, &node.code);
+    if let Some(failure) = crate::tls::verify_error(error) {
+        return Failure::coded(failure.message, &failure.code);
     }
     let mut current: Option<&(dyn std::error::Error + 'static)> = Some(error);
     while let Some(inner) = current {

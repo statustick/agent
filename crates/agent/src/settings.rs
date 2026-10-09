@@ -56,7 +56,7 @@ fn whole_number(value: Option<&str>, name: &str, fallback: usize, min: usize, ma
     let message = || format!("{name} must be a whole number from {min} to {max}");
     let number = match value {
         None | Some("") => fallback as f64,
-        Some(text) => js_number(text).ok_or_else(message)?,
+        Some(text) => parse_number(text).ok_or_else(message)?,
     };
     if number.fract() != 0.0 || number < min as f64 || number > max as f64 {
         return Err(message());
@@ -64,8 +64,8 @@ fn whole_number(value: Option<&str>, name: &str, fallback: usize, min: usize, ma
     Ok(number as usize)
 }
 
-/// `Number(text)` for the forms a setting can take: blank is 0, decimal, hex with 0x, exponents.
-fn js_number(text: &str) -> Option<f64> {
+/// A numeric setting: blank is 0, decimal, hex with 0x, exponents.
+fn parse_number(text: &str) -> Option<f64> {
     let text = text.trim();
     if text.is_empty() {
         return Some(0.0);
@@ -84,7 +84,7 @@ pub fn port(value: Option<&str>, name: &str) -> Result<Option<u16>, String> {
     if text.is_empty() {
         return Ok(None);
     }
-    match js_number(text) {
+    match parse_number(text) {
         Some(number) if number.fract() == 0.0 && (1.0..=65535.0).contains(&number) => Ok(Some(number as u16)),
         _ => Err(format!("{name} must be a port number from 1 to 65535")),
     }

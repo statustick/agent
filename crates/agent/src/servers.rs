@@ -92,7 +92,7 @@ pub fn metrics_router(agent: Arc<Agent>) -> Router {
     })
 }
 
-/// Every address of the host, IPv6 and IPv4, as Node.js's `listen(port)`.
+/// Every address of the host, IPv6 and IPv4.
 pub fn bind_any(port: u16) -> std::io::Result<TcpListener> {
     let socket = socket2::Socket::new(socket2::Domain::IPV6, socket2::Type::STREAM, None)?;
     socket.set_only_v6(false)?;

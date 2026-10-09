@@ -230,8 +230,8 @@ pub fn browser_error(message: &str) -> String {
 fn title(value: Option<&Value>) -> Value {
     let text = match value {
         Some(Value::String(text)) => text.clone(),
-        Some(other) => statustick_browser::validate::js_string(other),
-        None => "undefined".into(),
+        Some(other) => statustick_browser::validate::display_text(other),
+        None => String::new(),
     };
     Value::from(utf16_prefix(&text, MAX_STEP_TITLE_CHARS))
 }

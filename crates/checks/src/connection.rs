@@ -15,7 +15,7 @@ use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
 use x509_parser::prelude::{FromDer, X509Certificate};
 
-use crate::tls::{client_config, node_error, server_name, version_name};
+use crate::tls::{client_config, server_name, verify_error, version_name};
 use crate::util::{Failure, connect_failure, iso};
 
 const MAX_LINE_BYTES: usize = 4096;
@@ -69,10 +69,10 @@ pub async fn connect_plain(target: &Target) -> Result<TcpStream, Failure> {
     Ok(stream)
 }
 
-/// A TLS handshake failure as Node.js reports it: a verification code, a closed socket, or an OpenSSL-style code.
+/// A TLS handshake failure: a verification code, a closed socket, or an OpenSSL-style code.
 pub fn tls_failure(error: &std::io::Error) -> Failure {
-    if let Some(node) = error.get_ref().and_then(|inner| node_error(inner)) {
-        return Failure::coded(node.message, &node.code);
+    if let Some(failure) = error.get_ref().and_then(|inner| verify_error(inner)) {
+        return Failure::coded(failure.message, &failure.code);
     }
     if matches!(error.kind(), std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::BrokenPipe) {
         return Failure::coded("Client network socket disconnected before secure TLS connection was established", "ECONNRESET");
