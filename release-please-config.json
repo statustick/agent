@@ -28,8 +28,7 @@
     "charts/statustick-agent": {
       "release-type": "helm",
       "component": "chart",
-      "package-name": "statustick-agent",
-      "release-as": "1.0.0"
+      "package-name": "statustick-agent"
     }
   }
 }
