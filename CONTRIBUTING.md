@@ -1,21 +1,25 @@
 # Contributing
 
-Thank you for helping. Before you start on a larger change, open an issue so we can agree on the approach.
+For a larger change, please open an issue first so we can agree on the approach.
 
-- Keep the agent small: the resource budget (memory, CPU, image size) must hold; CI checks it with `scripts/agent-budget.sh`.
-- Jobs are data, never code. A new job field goes into the fixed schema in `crates/agent/src/schema.rs`, and a new result field into the result fields there and into `docs/agent-security.md`.
-- No response bodies, header values or cookies may leave the network.
-- Add tests for what you change, and run `cargo fmt --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings` and `cargo test --workspace --all-features` before you open a pull request. A change in `sandbox/` also needs `npm run typecheck` and `npm test` there.
+- Keep the agent small. CI checks memory, CPU and image size with `scripts/agent-budget.sh`.
+- Jobs are data, never code. A new job or result field goes into `crates/agent/src/schema.rs`, and a new result field also into `docs/agent-security.md`.
+- Response bodies, header values and cookies never leave the network.
+- Add tests for what you change. Before you open a pull request, run `cargo fmt --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings` and `cargo test --workspace --all-features`. For changes in `sandbox/`, also run `npm run typecheck` and `npm test` there.
 
-By contributing you agree that your contribution is licensed under the Apache License 2.0.
+By contributing, you agree that your contribution is licensed under the Apache License 2.0.
 
-## Pull requests and commits
+## Pull request titles
 
-Pull requests are squash-merged, so the pull request title becomes the commit on `main` and one line in the changelog. The title follows [Conventional Commits](https://www.conventionalcommits.org/): `<type>(<scope>): <summary>`, for example `feat(checks): resolve CAA records` or `fix(agent): retry the connect after a proxy error`. CI checks it.
+Pull requests are squash-merged. The title becomes the commit on `main` and a line in the changelog, so write it for the people who run the agent. It follows [Conventional Commits](https://www.conventionalcommits.org/), and CI checks it:
 
-- Types that reach the changelog: `feat` (a minor release), `fix` (a patch release), `perf` and `revert`. `docs`, `test`, `refactor`, `build`, `ci`, `chore` and `style` release nothing. A `!` after the type or scope (`feat(checks)!: …`) or a `BREAKING CHANGE:` footer makes a major release.
+```text
+fix(checks): match a DNS TXT expected value against the whole record
+```
+
+- `feat` makes a minor release and `fix` a patch release. `perf` and `revert` also show in the changelog. `docs`, `test`, `refactor`, `build`, `ci`, `chore` and `style` release nothing.
+- `!` after the type, or a `BREAKING CHANGE:` footer, makes a major release.
 - Scopes: `agent`, `checks`, `browser`, `sandbox`, `chart`, `docs`, `deps`. Changes under `charts/` release the chart; everything else releases the agent.
-- Write the summary for the people who run the agent: what changes for them, in the imperative, lower case, without a full stop. Explain why in the body when it is not obvious.
-- No ticket or issue tracker ids such as `ABC-123`. Refer to a GitHub issue or pull request by its link instead.
+- Use the imperative, lower case, no full stop. No tracker ids; link GitHub issues instead.
 
-Releases are made from these commits by release-please; never change a version, a changelog or a tag by hand.
+Versions, changelogs and tags are made by release-please. Don't change them by hand.
