@@ -87,30 +87,30 @@ Set these as environment variables.
 <!-- settings:start -->
 | Variable | Type | Default | Values | What it does |
 | -- | -- | -- | -- | -- |
-| `STATUSTICK_TOKEN` | text | none (required) | any | The agent's token, from its page in StatusTick. The agent sends it as `Authorization: Bearer` on every call. |
-| `STATUSTICK_URL` | URL | `https://agent.statustick.com` | `https`; `http` for `localhost`, `*.localhost` and `127.0.0.1` | Where the agent connects. Plain `http` is accepted only for local development. |
-| `STATUSTICK_CONCURRENCY` | whole number | `5` | 1 to 50 | How many checks run at the same time. Set on the machine, it wins over the agent's "Max checks" setting in the dashboard. Higher values use more memory. |
-| `STATUSTICK_ALLOW` | list | none | address ranges, single addresses, host names and `*.` subdomain wildcards, for example `10.0.0.0/8,192.168.1.20,*.corp.example` | Optional allowlist. When set, the agent checks only matching targets; any other check fails with "target not allowed by agent policy" and is never attempted. See "Target rules" below. |
-| `STATUSTICK_HOSTNAME` | text | the container's host name | any | The name the agent reports, shown as Host on its page. The token picks the agent, so a recreated container stays the same agent whatever its host name. |
-| `STATUSTICK_INSTALL` | choice | set by the install command or the chart | `docker`, `compose`, `helm` or `other` | How the agent was installed, shown on its page in the dashboard. Unset: `helm` inside Kubernetes, `docker` inside a Docker container, else `other`. |
-| `HTTPS_PROXY` | URL | none | `http://host:port` or `https://host:port`, with `user:password@` for basic authentication | Proxy for `https` traffic: the connection to StatusTick and HTTPS checks. Falls back to `HTTP_PROXY`. |
+| `STATUSTICK_TOKEN` | text | none (required) | any | The agent's token, from its page in StatusTick. |
+| `STATUSTICK_URL` | URL | `https://agent.statustick.com` | `https`; `http` for `localhost`, `*.localhost` and `127.0.0.1` | Where the agent connects. |
+| `STATUSTICK_CONCURRENCY` | whole number | `5` | 1 to 50 | Checks at the same time. Overrides "Max checks" in the dashboard. |
+| `STATUSTICK_ALLOW` | list | none | address ranges, single addresses, host names and `*.` subdomain wildcards, for example `10.0.0.0/8,192.168.1.20,*.corp.example` | Only check these targets; others fail without being tried. See "Target rules". |
+| `STATUSTICK_HOSTNAME` | text | the container's host name | any | The host name shown on the agent's page. |
+| `STATUSTICK_INSTALL` | choice | set by the install command or the chart | `docker`, `compose`, `helm` or `other` | How the agent was installed, shown on its page. Detected when unset. |
+| `HTTPS_PROXY` | URL | none | `http://host:port` or `https://host:port`, with `user:password@` for basic authentication | Proxy for StatusTick and HTTPS checks. Falls back to `HTTP_PROXY`. |
 | `HTTP_PROXY` | URL | none | as `HTTPS_PROXY` | Proxy for plain `http` checks. |
 | `NO_PROXY` | list | none | `db.internal`, `.corp` (the domain and its subdomains), `host:8443` (that port only), IP addresses, CIDR ranges such as `10.0.0.0/8`, or `*` for all | Hosts that skip the proxy. |
-| `NODE_EXTRA_CA_CERTS` | path | none | a PEM file | Extra CA certificates, for example your TLS-inspecting proxy's CA or your internal CA. Trusted for the connection to StatusTick and for HTTPS checks, next to the usual public CAs. |
-| `STATUSTICK_BUFFER_SIZE` | whole number | `10000` | 1 to 100000 | How many results the agent keeps while StatusTick is unreachable. When full, the oldest are dropped and counted. See "Offline buffer" below. |
-| `STATUSTICK_BUFFER_DIR` | path | none (memory only) | a writable folder | Keeps the buffer and the checks to repeat across restarts, usually on a mounted volume. The agent does not start when the folder cannot be written. |
-| `STATUSTICK_HEALTH_PORT` | port | none (no port) | 1 to 65535 | Opens `GET /healthz` (`200 ok` while the process runs) and `GET /readyz` (`200 ok` while StatusTick answered in the last two minutes, `503` otherwise) on this port, for Kubernetes probes. Nothing else is served. The Helm chart sets it to `8080`. |
-| `STATUSTICK_RELAY_PORT` | port | none (no port) | 1 to 65535, not the health port | Opens the heartbeat relay on this port: jobs inside your network ping the agent instead of `webhook.statustick.com`. Internal only, never expose it to the internet. See "Heartbeat relay" below. |
-| `STATUSTICK_RELAY_HOST` | IP address | `0.0.0.0` | an address of this host | The address the heartbeat relay listens on. Inside a container `0.0.0.0` is needed for a published port; on a host with several networks set the internal address. |
-| `STATUSTICK_DISCOVERY` | choice | none (off) | `kubernetes` | Turns on Kubernetes service discovery: annotated Services get monitors in the agent's location. Only inside a pod with a service account token. See "Kubernetes service discovery" below. |
-| `STATUSTICK_DISCOVERY_NAMESPACES` | list | none (every namespace) | namespaces, for example `shop,payments` | The namespaces to watch instead of all of them. |
-| `METRICS_PORT` | port | none (no port) | 1 to 65535, not the health or relay port | Opens `GET /metrics` (Prometheus text format) on this port. Nothing else is served there. See "Metrics" below. |
-| `METRICS_HOST` | IP address | `0.0.0.0` | an address of this host | The address the metrics port listens on. Set `127.0.0.1` to keep it on the host. |
-| `STATUSTICK_SHARE_METRICS` | choice | none (follows the dashboard) | `true` or `false` | `true` sends the agent's health to StatusTick every minute; `false` never does, whatever the dashboard says. Unset follows the agent's "Share health" setting in the dashboard (off by default). See "Metrics" below. |
-| `BROWSER_CONCURRENCY` | whole number | `1` | 0 to 8 | Browser checks only. How many browser checks run at the same time; `0` turns them off. Set on the machine, it wins over the agent's "Browser runs" setting in the dashboard. Each run needs up to 2 GB of memory (see below). |
-| `STATUSTICK_BROWSER_ISOLATION` | choice | none (isolated when the container allows it) | `user` or `off` | Browser checks: each run runs as its own user, so a script cannot read the agent's token or files. `user` refuses to start when the container does not allow it; `off` runs browser checks as the agent's user. See "Browser checks" below. |
-| `STATUSTICK_REQUIRE_SECRET_HOSTS` | choice | none | `true` | `true` refuses every `STATUSTICK_SECRET_` variable that has no `_HOSTS` list. |
-| `STATUSTICK_SECRET_<NAME>_HOSTS` | list | none | as `STATUSTICK_ALLOW` | The hosts the secret `STATUSTICK_SECRET_<NAME>` may be sent to. A database check that uses the secret for any other host fails with `SECRET_NOT_ALLOWED`. See "Database checks" below. |
+| `NODE_EXTRA_CA_CERTS` | path | none | a PEM file | Extra CA certificates to trust, such as your proxy's or internal CA. |
+| `STATUSTICK_BUFFER_SIZE` | whole number | `10000` | 1 to 100000 | Results kept while StatusTick is unreachable. The oldest are dropped when full. |
+| `STATUSTICK_BUFFER_DIR` | path | none (memory only) | a writable folder | Keeps the buffer across restarts. The agent stops if it can't write here. |
+| `STATUSTICK_HEALTH_PORT` | port | none (no port) | 1 to 65535 | Serves `/healthz` and `/readyz` for Kubernetes probes. The chart sets `8080`. |
+| `STATUSTICK_RELAY_PORT` | port | none (no port) | 1 to 65535, not the health port | Opens the heartbeat relay. Internal only; never expose it. See "Heartbeat relay". |
+| `STATUSTICK_RELAY_HOST` | IP address | `0.0.0.0` | an address of this host | Address the relay listens on. Use the internal one on multi-network hosts. |
+| `STATUSTICK_DISCOVERY` | choice | none (off) | `kubernetes` | Creates monitors from annotated Kubernetes Services. See "Kubernetes service discovery". |
+| `STATUSTICK_DISCOVERY_NAMESPACES` | list | none (every namespace) | namespaces, for example `shop,payments` | Namespaces to watch. |
+| `METRICS_PORT` | port | none (no port) | 1 to 65535, not the health or relay port | Serves Prometheus `/metrics`. See "Metrics". |
+| `METRICS_HOST` | IP address | `0.0.0.0` | an address of this host | Address the metrics port listens on. |
+| `STATUSTICK_SHARE_METRICS` | choice | none (follows the dashboard) | `true` or `false` | Share the agent's health with StatusTick. Unset follows the dashboard. |
+| `BROWSER_CONCURRENCY` | whole number | `1` | 0 to 8 | Browser checks only. Browser checks at the same time; `0` turns them off. Each needs up to 2 GB. |
+| `STATUSTICK_BROWSER_ISOLATION` | choice | none (isolated when the container allows it) | `user` or `off` | Run each browser check as its own user. `user` requires it; `off` disables it. |
+| `STATUSTICK_REQUIRE_SECRET_HOSTS` | choice | none | `true` | Refuse secrets that have no `_HOSTS` list. |
+| `STATUSTICK_SECRET_<NAME>_HOSTS` | list | none | as `STATUSTICK_ALLOW` | Hosts that may receive `STATUSTICK_SECRET_<NAME>`. See "Database checks". |
 <!-- settings:end -->
 
 Lower-case `https_proxy`, `http_proxy` and `no_proxy` work too, and win over the upper-case names.
