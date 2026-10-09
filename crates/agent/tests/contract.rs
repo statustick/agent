@@ -61,7 +61,7 @@ async fn connects_leases_runs_and_posts_only_documented_fields() {
             { "leaseId": "l-closed", "result": { "status": "down", "error": refused, "errorCode": "ECONNREFUSED" } },
             {
                 "leaseId": "l-http",
-                "result": { "status": "up", "httpStatus": 200, "details": { "textMatch": true, "headerMismatch": { "name": "X-Version", "reason": "different" } } }
+                "result": { "status": "down", "httpStatus": 200, "details": { "textMatch": true, "headerMismatch": { "name": "X-Version", "reason": "different" } } }
             },
             { "leaseId": "l-invalid", "result": { "status": "error", "error": "Invalid recordType" } },
             { "leaseId": "l-metadata", "result": { "status": "down", "error": "target not allowed", "errorType": "TargetNotAllowed" } },
