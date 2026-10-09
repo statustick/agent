@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Publish the image of this released agent version again (X.Y.Z)
+        description: Publish the image and binaries of this released agent version again (X.Y.Z)
         required: true
 
 concurrency:
@@ -37,15 +37,21 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-  image:
+  build:
     needs: release-please
     if: always() && (needs.release-please.outputs.agent == 'true' || inputs.version != '')
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write
-      id-token: write
     env:
       IMAGE: ${{ vars.AGENT_IMAGE || 'ghcr.io/statustick/agent' }}
       VERSION: ${{ inputs.version || needs.release-please.outputs.agent-version }}
@@ -59,20 +65,36 @@ jobs:
           sudo systemctl restart docker
       - name: Check that the release matches version.txt
         run: '[ "$(cat version.txt)" = "$VERSION" ] || { echo "version.txt is not $VERSION"; exit 1; }'
-      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
         with:
           buildkitd-config-inline: |
             [registry."docker.io"]
               mirrors = ["mirror.gcr.io"]
-      - uses: sigstore/cosign-installer@v3
-      - name: Build the image for the scan
+      - name: Build the static binary
         uses: docker/build-push-action@v6
         with:
           context: .
+          target: binary-export
+          platforms: linux/${{ matrix.arch }}
+          outputs: type=local,dest=dist
+          cache-from: type=gha,scope=agent-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=agent-${{ matrix.arch }}
+      - name: Package the binary
+        run: |
+          file dist/statustick-agent | grep -q 'statically linked'
+          tar -czf "statustick-agent-linux-${{ matrix.arch }}.tar.gz" -C dist statustick-agent
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.arch }}
+          path: statustick-agent-linux-${{ matrix.arch }}.tar.gz
+      - name: Build the image for the checks
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
           load: true
           tags: agent-scan:ci
-          cache-from: type=gha,scope=agent-image
+          cache-from: type=gha,scope=agent-${{ matrix.arch }}
       - run: scripts/agent-isolation.sh agent-scan:ci
       - name: Scan the image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -81,6 +103,47 @@ jobs:
           severity: CRITICAL
           ignore-unfixed: true
           exit-code: '1'
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: push
+        name: Push the image by digest
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          sbom: true
+          provenance: mode=max
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=agent-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=agent-${{ matrix.arch }}
+      - run: echo "${{ steps.push.outputs.digest }}" > digest-${{ matrix.arch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.arch }}
+          path: digest-${{ matrix.arch }}
+
+  image:
+    needs: [release-please, build]
+    if: always() && needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    env:
+      IMAGE: ${{ vars.AGENT_IMAGE || 'ghcr.io/statustick/agent' }}
+      VERSION: ${{ inputs.version || needs.release-please.outputs.agent-version }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+      - uses: sigstore/cosign-installer@v3
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -96,55 +159,35 @@ jobs:
             type=semver,pattern={{major}}.{{minor}},value=${{ env.VERSION }}
             type=semver,pattern={{major}},value=${{ env.VERSION }}
             type=raw,value=latest
-      - id: build
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          sbom: true
-          provenance: mode=max
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=agent-image
+      - name: Publish the multi-platform image
+        run: |
+          tags=()
+          while read -r tag; do tags+=(-t "$tag"); done < <(jq -r '.tags[]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          docker buildx imagetools create "${tags[@]}" "$IMAGE@$(cat digest-amd64)" "$IMAGE@$(cat digest-arm64)"
+          docker buildx imagetools inspect "$IMAGE:$VERSION"
       - name: Sign the image
-        run: cosign sign --yes "${IMAGE}@${{ steps.build.outputs.digest }}"
+        run: cosign sign --yes "$IMAGE@$(docker buildx imagetools inspect "$IMAGE:$VERSION" --format '{{json .Manifest}}' | jq -r .digest)"
 
   binaries:
-    needs: release-please
-    if: needs.release-please.outputs.agent == 'true'
+    needs: [release-please, build]
+    if: always() && needs.build.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 5
     permissions:
       contents: write
     env:
-      TAG: ${{ needs.release-please.outputs.agent-tag }}
+      TAG: agent-v${{ inputs.version || needs.release-please.outputs.agent-version }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/download-artifact@v4
         with:
-          buildkitd-config-inline: |
-            [registry."docker.io"]
-              mirrors = ["mirror.gcr.io"]
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          target: binary-export
-          platforms: linux/amd64,linux/arm64
-          outputs: type=local,dest=dist
-          cache-from: type=gha,scope=agent-binary
-          cache-to: type=gha,mode=max,scope=agent-binary
+          pattern: binary-*
+          merge-multiple: true
       - name: Attach the static binaries to the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cd dist
-          for arch in amd64 arm64; do
-            file "linux_$arch/statustick-agent" | grep -q 'statically linked'
-            tar -czf "statustick-agent-linux-$arch.tar.gz" -C "linux_$arch" statustick-agent
-          done
           sha256sum statustick-agent-linux-*.tar.gz > SHA256SUMS
-          gh release upload "$TAG" statustick-agent-linux-*.tar.gz SHA256SUMS --repo "$GITHUB_REPOSITORY"
+          gh release upload "$TAG" statustick-agent-linux-*.tar.gz SHA256SUMS --clobber --repo "$GITHUB_REPOSITORY"
 
   chart:
     needs: release-please

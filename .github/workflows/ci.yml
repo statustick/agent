@@ -117,8 +117,8 @@ jobs:
           context: .
           load: true
           tags: statustick-agent:ci
-          cache-from: type=gha,scope=agent-image
-          cache-to: type=gha,mode=max,scope=agent-image
+          cache-from: type=gha,scope=agent-amd64
+          cache-to: type=gha,mode=max,scope=agent-amd64
       - run: scripts/agent-budget.sh statustick-agent:ci
       - run: scripts/agent-isolation.sh statustick-agent:ci
       - run: scripts/agent-zombies.sh statustick-agent:ci
