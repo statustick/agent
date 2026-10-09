@@ -46,7 +46,7 @@ health:
 
 # The heartbeat relay: internal only, never expose it to the internet.
 relay:
-  # -- Turns on the heartbeat relay (`STATUSTICK_RELAY_PORT`) and adds a `ClusterIP` Service, `<fullname>-relay` (`statustick-agent-relay` for the install command above). See "Heartbeat relay".
+  # -- Turns on the heartbeat relay (`STATUSTICK_RELAY_PORT`) and adds a `ClusterIP` Service, `<fullname>-relay` (`statustick-agent-relay` for the install command above). See "Heartbeat relay" in the agent guide.
   enabled: false
   # -- The relay's container port.
   port: 8081
@@ -77,7 +77,7 @@ metrics:
     labels: {}
 
 discovery:
-  # -- Turns on Kubernetes service discovery (`STATUSTICK_DISCOVERY=kubernetes`): annotated Services get monitors. Adds a ServiceAccount with read-only access to Services and mounts its token. See "Kubernetes service discovery".
+  # -- Turns on Kubernetes service discovery (`STATUSTICK_DISCOVERY=kubernetes`): annotated Services get monitors. Adds a ServiceAccount with read-only access to Services and mounts its token. See "Kubernetes service discovery" in the agent guide.
   enabled: false
   # -- `STATUSTICK_DISCOVERY_NAMESPACES`: only these namespaces, with a Role in each instead of a ClusterRole.
   # @default -- `[]` (every namespace)
@@ -114,11 +114,11 @@ resources:
     cpu: 500m
 
 browser:
-  # -- Runs each browser check as its own user, so a script cannot read the agent's token or files. Adds the `SETUID` and `SETGID` capabilities and allows privilege escalation for the helper that switches user, so it is not allowed by the restricted Pod Security level (baseline allows it). See "Security".
+  # -- Runs each browser check as its own user, so a script cannot read the agent's token or files. Adds the `SETUID` and `SETGID` capabilities and allows privilege escalation for the helper that switches user, so it is not allowed by the restricted Pod Security level (baseline allows it).
   isolation: false
 
 ping:
-  # -- Allows ICMP for the non-root agent with the safe sysctl `net.ipv4.ping_group_range`. Off: the agent checks a TCP connection to port 443 instead of ping. See "Ping".
+  # -- Allows ICMP for the non-root agent with the safe sysctl `net.ipv4.ping_group_range`. Off: the agent checks a TCP connection to port 443 instead of ping.
   enabled: false
   # -- Also adds the `NET_RAW` capability, for runtimes that give it to non-root processes. Not allowed by the baseline or restricted Pod Security levels.
   netRaw: false

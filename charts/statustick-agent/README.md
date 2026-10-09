@@ -46,7 +46,7 @@ See [the agent guide](https://github.com/statustick/agent/blob/main/docs/agent.m
 | `statustick.allow` | none | `STATUSTICK_ALLOW`: the only targets the agent checks, for example `10.0.0.0/8,*.corp.example`. |
 | `statustick.bufferSize` | `10000` | Results kept while StatusTick is unreachable. |
 | `health.port` | `8080` | `STATUSTICK_HEALTH_PORT`: `/healthz` and `/readyz` for the probes. |
-| `relay.enabled` | `false` | Turns on the heartbeat relay (`STATUSTICK_RELAY_PORT`) and adds a `ClusterIP` Service, `<fullname>-relay` (`statustick-agent-relay` for the install command above). See "Heartbeat relay". |
+| `relay.enabled` | `false` | Turns on the heartbeat relay (`STATUSTICK_RELAY_PORT`) and adds a `ClusterIP` Service, `<fullname>-relay` (`statustick-agent-relay` for the install command above). See "Heartbeat relay" in the agent guide. |
 | `relay.port` | `8081` | The relay's container port. |
 | `relay.service.port` | `8081` | The relay Service port. |
 | `relay.service.annotations` | none | The relay Service annotations. |
@@ -58,13 +58,13 @@ See [the agent guide](https://github.com/statustick/agent/blob/main/docs/agent.m
 | `metrics.serviceMonitor.enabled` | `false` | Adds a `ServiceMonitor` for the Prometheus Operator. |
 | `metrics.serviceMonitor.interval` | `30s` | How often Prometheus scrapes the agents. |
 | `metrics.serviceMonitor.labels` | none | Labels for the `ServiceMonitor`, for example the one your Prometheus selects. |
-| `discovery.enabled` | `false` | Turns on Kubernetes service discovery (`STATUSTICK_DISCOVERY=kubernetes`): annotated Services get monitors. Adds a ServiceAccount with read-only access to Services and mounts its token. See "Kubernetes service discovery". |
+| `discovery.enabled` | `false` | Turns on Kubernetes service discovery (`STATUSTICK_DISCOVERY=kubernetes`): annotated Services get monitors. Adds a ServiceAccount with read-only access to Services and mounts its token. See "Kubernetes service discovery" in the agent guide. |
 | `discovery.namespaces` | `[]` (every namespace) | `STATUSTICK_DISCOVERY_NAMESPACES`: only these namespaces, with a Role in each instead of a ClusterRole. |
 | `livenessProbe` | `/healthz` | The liveness probe. |
 | `readinessProbe` | `/readyz` | The readiness probe; `/readyz` fails while StatusTick has not answered for two minutes. |
 | `resources` | requests 20m CPU, 64Mi; limit 500m CPU | Per replica. No memory limit: each browser run can use up to 2 GB. A limit needs room for the browser runs × 2 GB + 256 MB. |
-| `browser.isolation` | `false` | Runs each browser check as its own user, so a script cannot read the agent's token or files. Adds the `SETUID` and `SETGID` capabilities and allows privilege escalation for the helper that switches user, so it is not allowed by the restricted Pod Security level (baseline allows it). See "Security". |
-| `ping.enabled` | `false` | Allows ICMP for the non-root agent with the safe sysctl `net.ipv4.ping_group_range`. Off: the agent checks a TCP connection to port 443 instead of ping. See "Ping". |
+| `browser.isolation` | `false` | Runs each browser check as its own user, so a script cannot read the agent's token or files. Adds the `SETUID` and `SETGID` capabilities and allows privilege escalation for the helper that switches user, so it is not allowed by the restricted Pod Security level (baseline allows it). |
+| `ping.enabled` | `false` | Allows ICMP for the non-root agent with the safe sysctl `net.ipv4.ping_group_range`. Off: the agent checks a TCP connection to port 443 instead of ping. |
 | `ping.netRaw` | `false` | Also adds the `NET_RAW` capability, for runtimes that give it to non-root processes. Not allowed by the baseline or restricted Pod Security levels. |
 | `proxy.https` | none | `HTTPS_PROXY`: the connection to StatusTick and HTTPS checks. |
 | `proxy.http` | none | `HTTP_PROXY`: plain http checks. |
