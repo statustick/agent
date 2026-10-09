@@ -4,7 +4,8 @@ use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
 use rustls::pki_types::CertificateDer;
-use serde_json::{Map, Value, json};
+use serde::Serialize;
+use serde_json::{Map, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use x509_parser::prelude::{FromDer, X509Certificate};
@@ -35,8 +36,32 @@ fn time_of(time: x509_parser::time::ASN1Time) -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::from_timestamp(time.timestamp(), 0).unwrap_or_default()
 }
 
-/// The fields the platform stores for a certificate, with the first problem found.
-pub fn describe_certificate(peer: &PeerCertificates, host: &str, now: chrono::DateTime<chrono::Utc>) -> Result<Value, Failure> {
+/// The fields the platform stores for a certificate. [error] is the first problem found and is sent as null when there is
+/// none. Names are a string, a list when the certificate holds several, or null.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CertificateDescription {
+    pub valid: bool,
+    pub error: Option<String>,
+    pub valid_from: String,
+    pub valid_to: String,
+    pub days_left: i64,
+    pub lifetime_days: i64,
+    pub issuer: Value,
+    pub subject: Value,
+    pub hostname_match: bool,
+    pub chain: Vec<ChainCertificate>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChainCertificate {
+    pub subject: Value,
+    pub issuer: Value,
+    pub valid_to: String,
+}
+
+pub fn describe_certificate(peer: &PeerCertificates, host: &str, now: chrono::DateTime<chrono::Utc>) -> Result<CertificateDescription, Failure> {
     let leaf_der = peer.chain.first().ok_or_else(|| Failure::plain("The server sent no certificate"))?;
     let (_, leaf) = X509Certificate::from_der(leaf_der).map_err(|_| Failure::plain("The server sent no certificate"))?;
     let valid_from = time_of(leaf.validity().not_before);
@@ -50,29 +75,56 @@ pub fn describe_certificate(peer: &PeerCertificates, host: &str, now: chrono::Da
     } else {
         peer.authorization_error.as_ref().map(|code| format!("Certificate is not trusted: {code}"))
     };
-    let chain: Vec<Value> = peer_chain(&peer.chain)
+    let chain = peer_chain(&peer.chain)
         .iter()
         .take(MAX_CHAIN)
         .filter_map(|der| X509Certificate::from_der(der).ok().map(|(_, certificate)| certificate))
-        .map(|certificate| {
-            let subject =
-                name_attribute(common_names(certificate.subject())).or_else(|| name_attribute(organizations(certificate.subject()))).unwrap_or(Value::Null);
-            json!({ "subject": subject, "issuer": issuer_name(certificate.issuer()), "validTo": iso(time_of(certificate.validity().not_after)) })
+        .map(|certificate| ChainCertificate {
+            subject: name_attribute(common_names(certificate.subject()))
+                .or_else(|| name_attribute(organizations(certificate.subject())))
+                .unwrap_or(Value::Null),
+            issuer: issuer_name(certificate.issuer()),
+            valid_to: iso(time_of(certificate.validity().not_after)),
         })
         .collect();
     let millis = |from: chrono::DateTime<chrono::Utc>, to: chrono::DateTime<chrono::Utc>| (to.timestamp_millis() - from.timestamp_millis()) as f64;
-    Ok(json!({
-        "valid": error.is_none(),
-        "error": error,
-        "validFrom": iso(valid_from),
-        "validTo": iso(valid_to),
-        "daysLeft": (millis(now, valid_to) / DAY_MS).floor() as i64,
-        "lifetimeDays": (millis(valid_from, valid_to) / DAY_MS).round() as i64,
-        "issuer": issuer_name(leaf.issuer()),
-        "subject": name_attribute(common_names(leaf.subject())).unwrap_or(Value::Null),
-        "hostnameMatch": hostname_error.is_none(),
-        "chain": chain,
-    }))
+    Ok(CertificateDescription {
+        valid: error.is_none(),
+        error,
+        valid_from: iso(valid_from),
+        valid_to: iso(valid_to),
+        days_left: (millis(now, valid_to) / DAY_MS).floor() as i64,
+        lifetime_days: (millis(valid_from, valid_to) / DAY_MS).round() as i64,
+        issuer: issuer_name(leaf.issuer()),
+        subject: name_attribute(common_names(leaf.subject())).unwrap_or(Value::Null),
+        hostname_match: hostname_error.is_none(),
+        chain,
+    })
+}
+
+/// The answer of one certificate check. [host] and [port] are echoed as sent (443 when missing).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SslCheckResult {
+    pub host: Value,
+    pub port: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protocols: Option<Vec<String>>,
+    #[serde(rename = "legacyTLS", skip_serializing_if = "Option::is_none")]
+    pub legacy_tls: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weak_key: Option<bool>,
+    pub status: &'static str,
+    pub response_time: i64,
+    pub timestamp: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub certificate: Option<CertificateDescription>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
 }
 
 /// Opens a TLS connection to an already allowed address and reads the certificates without trusting them.
@@ -254,42 +306,37 @@ pub async fn ssl_check(request: &Map<String, Value>) -> Value {
         Ok::<_, Failure>((certificate, offered, peer.legacy_tls))
     }
     .await;
-    let mut result = Map::new();
-    result.insert("host".into(), host);
-    result.insert("port".into(), port_value);
-    match outcome {
-        Ok((certificate, offered, legacy_tls)) => {
-            if let Some(offered) = offered {
-                result.insert("protocols".into(), Value::from(offered));
-            }
-            if let Some(legacy) = legacy_tls {
-                result.insert("legacyTLS".into(), Value::Bool(true));
-                result.insert("tlsVersion".into(), Value::from(legacy.version));
-                if legacy.weak_key {
-                    result.insert("weakKey".into(), Value::Bool(true));
-                }
-            }
-            let valid = certificate["valid"].as_bool().unwrap_or(false);
-            result.insert("status".into(), Value::from(if valid { "up" } else { "down" }));
-            result.insert("responseTime".into(), Value::from(elapsed_ms(start)));
-            result.insert("timestamp".into(), Value::from(now_iso()));
-            let error = certificate["error"].clone();
-            result.insert("certificate".into(), certificate);
-            if !error.is_null() {
-                result.insert("error".into(), error);
-            }
-        }
-        Err(failure) => {
-            result.insert("status".into(), Value::from("error"));
-            result.insert("responseTime".into(), Value::from(elapsed_ms(start)));
-            result.insert("timestamp".into(), Value::from(now_iso()));
-            result.insert("error".into(), Value::from(failure.message));
-            if let Some(code) = failure.code {
-                result.insert("errorCode".into(), Value::from(code));
-            }
-        }
-    }
-    Value::Object(result)
+    let result = match outcome {
+        Ok((certificate, offered, legacy_tls)) => SslCheckResult {
+            host,
+            port: port_value,
+            protocols: offered,
+            legacy_tls: legacy_tls.as_ref().map(|_| true),
+            tls_version: legacy_tls.as_ref().map(|legacy| legacy.version.clone()),
+            weak_key: legacy_tls.as_ref().and_then(|legacy| legacy.weak_key.then_some(true)),
+            status: if certificate.valid { "up" } else { "down" },
+            response_time: elapsed_ms(start),
+            timestamp: now_iso(),
+            error: certificate.error.clone(),
+            certificate: Some(certificate),
+            error_code: None,
+        },
+        Err(failure) => SslCheckResult {
+            host,
+            port: port_value,
+            protocols: None,
+            legacy_tls: None,
+            tls_version: None,
+            weak_key: None,
+            status: "error",
+            response_time: elapsed_ms(start),
+            timestamp: now_iso(),
+            certificate: None,
+            error: Some(failure.message),
+            error_code: failure.code,
+        },
+    };
+    serde_json::to_value(result).expect("serializable result")
 }
 
 #[cfg(test)]
