@@ -930,7 +930,7 @@ fn public_txt_value() {
 }
 
 #[test]
-#[ignore = "engine bug: an SOA answer is one object, so it is never up"]
+#[ignore = "needs the internet"]
 fn public_soa() {
     fixtures(false);
     expect_all(vec![("public dns SOA", "dns", json!({ "hostname": "github.com", "recordType": "SOA" }), vec![("status", json!("up"))])]);

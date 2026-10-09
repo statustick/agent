@@ -139,9 +139,13 @@ fn record_text(record: &Value) -> Option<String> {
     }
 }
 
-/// A DNS answer is up when it has records; an SOA answer is one object, which has no length.
+/// A DNS answer is up when it has records; an SOA answer is one object.
 pub fn has_records(records: &Value) -> bool {
-    records.as_array().is_some_and(|items| !items.is_empty())
+    match records {
+        Value::Array(items) => !items.is_empty(),
+        Value::Object(_) => true,
+        _ => false,
+    }
 }
 
 /// `/check/dns` and the agent's `dns` job.
@@ -209,5 +213,12 @@ mod tests {
         assert_eq!(record_text(&json!(["v=spf1 include:_spf.example.com", " ~all"])).as_deref(), Some("v=spf1 include:_spf.example.com ~all"));
         assert_eq!(record_text(&json!("192.0.2.1")).as_deref(), Some("192.0.2.1"));
         assert_eq!(record_text(&json!({ "exchange": "mx.example.com", "priority": 10 })), None);
+    }
+
+    #[test]
+    fn counts_an_soa_answer_as_records() {
+        assert!(has_records(&json!({ "nsname": "ns1.example.com", "serial": 1 })));
+        assert!(has_records(&json!(["192.0.2.1"])));
+        assert!(!has_records(&json!([])));
     }
 }
