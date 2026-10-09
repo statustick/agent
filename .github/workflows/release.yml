@@ -53,10 +53,18 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: agent-v${{ inputs.version || needs.release-please.outputs.agent-version }}
+      - name: Pull Docker Hub images through a mirror
+        run: |
+          echo '{"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee /etc/docker/daemon.json
+          sudo systemctl restart docker
       - name: Check that the release matches version.txt
         run: '[ "$(cat version.txt)" = "$VERSION" ] || { echo "version.txt is not $VERSION"; exit 1; }'
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
       - uses: sigstore/cosign-installer@v3
       - name: Build the image for the scan
         uses: docker/build-push-action@v6
@@ -114,6 +122,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v3
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
       - uses: docker/build-push-action@v6
         with:
           context: .
