@@ -18,32 +18,42 @@ fn via(url: &str, settings: &ProxySettings) -> Option<String> {
 }
 
 #[test]
-fn proxy_settings() {
-    let lower = settings(&[("HTTPS_PROXY", "http://proxy:1"), ("no_proxy", "example.com"), ("NO_PROXY", "other.com")]).unwrap();
-    assert_eq!(via("https://example.com/", &lower), None);
-    assert_eq!(settings(&[("HTTP_PROXY", "http://")]).unwrap_err(), "HTTP_PROXY is not a valid proxy URL");
+fn lower_case_no_proxy_wins_over_upper_case() {
+    let settings = settings(&[("HTTPS_PROXY", "http://proxy:1"), ("no_proxy", "example.com"), ("NO_PROXY", "other.com")]).unwrap();
+    assert_eq!(via("https://example.com/", &settings), None);
+}
 
-    let names = settings(&[("HTTPS_PROXY", "http://proxy:3128"), ("NO_PROXY", "intranet.corp, .internal,*.lan")]).unwrap();
-    for skipped in ["https://intranet.corp/", "https://wiki.intranet.corp/", "https://db.internal/", "https://nas.lan/"] {
-        assert_eq!(via(skipped, &names), None, "{skipped}");
+#[test]
+fn an_invalid_proxy_url_is_refused() {
+    assert_eq!(settings(&[("HTTP_PROXY", "http://")]).unwrap_err(), "HTTP_PROXY is not a valid proxy URL");
+}
+
+#[test]
+fn no_proxy_matches_domains_subdomains_and_wildcards() {
+    let settings = settings(&[("HTTPS_PROXY", "http://proxy:3128"), ("NO_PROXY", "intranet.corp, .internal,*.lan")]).unwrap();
+    for direct in ["https://intranet.corp/", "https://wiki.intranet.corp/", "https://db.internal/", "https://nas.lan/"] {
+        assert_eq!(via(direct, &settings), None, "{direct}");
     }
     for proxied in ["https://notintranet.corp/", "https://example.com/"] {
-        assert_eq!(via(proxied, &names).as_deref(), Some("http://proxy:3128/"), "{proxied}");
+        assert_eq!(via(proxied, &settings).as_deref(), Some("http://proxy:3128/"), "{proxied}");
     }
+}
 
+#[test]
+fn no_proxy_matches_ports_addresses_and_ranges() {
     let port = settings(&[("HTTPS_PROXY", "http://proxy:3128"), ("NO_PROXY", "app.corp:8443")]).unwrap();
     assert_eq!(via("https://app.corp:8443/", &port), None);
     assert_eq!(via("https://app.corp/", &port).as_deref(), Some("http://proxy:3128/"));
 
     let addresses = settings(&[("HTTP_PROXY", "http://proxy:3128"), ("NO_PROXY", "10.0.0.0/8,192.168.1.5,::1,[fd00::1]")]).unwrap();
-    for skipped in ["http://10.20.30.40/", "http://192.168.1.5:8080/", "http://[::1]/", "http://[fd00::1]/"] {
-        assert_eq!(via(skipped, &addresses), None, "{skipped}");
+    for direct in ["http://10.20.30.40/", "http://192.168.1.5:8080/", "http://[::1]/", "http://[fd00::1]/"] {
+        assert_eq!(via(direct, &addresses), None, "{direct}");
     }
     assert_eq!(via("http://192.168.1.6/", &addresses).as_deref(), Some("http://proxy:3128/"));
 }
 
 #[test]
-fn assets_in_page_order() {
+fn assets_are_listed_in_page_order_without_data_urls_or_ignored_hosts() {
     let page = r#"<!doctype html><html><head>
   <link rel="stylesheet" href="/css/site.css"><link rel="icon" href="/favicon.ico">
   <script src="https://cdn.example.net/app.js"></script>
@@ -67,7 +77,7 @@ fn assets_in_page_order() {
 }
 
 #[test]
-fn json_paths() {
+fn json_assertions_accept_simple_paths_and_name_the_failing_one() {
     for path in ["$", "$.a", "$.a.b[0]", "$[2].x_y-z"] {
         assert!(valid_json_path(path), "{path}");
     }
@@ -85,7 +95,7 @@ fn json_paths() {
 }
 
 #[test]
-fn firewall_pages() {
+fn a_firewall_challenge_is_recognised_by_its_page_or_header() {
     let headers = |pairs: &[(&str, &str)]| pairs.iter().map(|(name, value)| (name.to_string(), value.to_string())).collect::<BTreeMap<_, _>>();
     let challenge = r#"<html><title>Just a moment...</title><script src="/cdn-cgi/challenge-platform/h/b/orchestrate"></script>"#;
     assert_eq!(detect_block(503, &headers(&[("server", "cloudflare")]), challenge), Some("Cloudflare challenge page"));
