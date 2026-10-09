@@ -45,7 +45,6 @@ Agent:
 
 - The agent version is `version.txt`; release-please sets it and `appVersion` in `Chart.yaml` (`x-release-please-version`). `crates/agent/build.rs` compiles it in.
 - Playwright is pinned in `sandbox/package.json` (with the `chromium` field); the image installs that Chromium. No busybox in the image: CI and scripts use `node -e` instead of `wget`.
-- `release-as` in `release-please-config.json` forces the first public release to 1.0.0; remove it after that release.
 
 ## Workflow
 
