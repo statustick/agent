@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/statustick/agent/compare/agent-v1.0.1...agent-v1.0.2) (2026-10-09)
+
+
+### Bug Fixes
+
+* stop showing JavaScript leftovers such as "undefined" in messages ([#15](https://github.com/statustick/agent/issues/15)) ([46b4a08](https://github.com/statustick/agent/commit/46b4a08c7af7bc0983ab32c02ab9acf53188d9ee))
+
 ## [1.0.1](https://github.com/statustick/agent/compare/agent-v1.0.0...agent-v1.0.1) (2026-10-09)
 
 
