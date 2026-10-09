@@ -3,7 +3,7 @@ use std::future::Future;
 use std::sync::LazyLock;
 
 use regex::Regex;
-use serde_json::{Value, json};
+use serde::Serialize;
 use url::Url;
 
 use crate::util::Failure;
@@ -77,8 +77,24 @@ pub fn extract_assets(html: &str, page_url: &str, ignore_hosts: &[String], max: 
     urls
 }
 
-/// Checks each asset with [request] (HEAD, then GET when HEAD is refused); returns `{checked, failed}`.
-pub async fn check_assets<F, Fut>(urls: Vec<String>, request: F) -> Value
+#[derive(Debug, PartialEq, Serialize)]
+pub struct AssetCheck {
+    pub checked: usize,
+    pub failed: Vec<FailedAsset>,
+}
+
+/// An asset that answered 400 or more ([status]) or could not be fetched ([error]).
+#[derive(Debug, PartialEq, Serialize)]
+pub struct FailedAsset {
+    pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Checks each asset with [request] (HEAD, then GET when HEAD is refused).
+pub async fn check_assets<F, Fut>(urls: Vec<String>, request: F) -> AssetCheck
 where
     F: Fn(String, &'static str) -> Fut,
     Fut: Future<Output = Result<u16, Failure>>,
@@ -94,15 +110,15 @@ where
                 }
                 match result {
                     Ok(status) if status < 400 => None,
-                    Ok(status) => Some(json!({ "url": url, "status": status })),
-                    Err(error) => Some(json!({ "url": url, "error": error.message })),
+                    Ok(status) => Some(FailedAsset { url: url.clone(), status: Some(status), error: None }),
+                    Err(error) => Some(FailedAsset { url: url.clone(), status: None, error: Some(error.message) }),
                 }
             }
         }))
         .await;
         failed.extend(results.into_iter().flatten());
     }
-    json!({ "checked": urls.len(), "failed": failed })
+    AssetCheck { checked: urls.len(), failed }
 }
 
 #[cfg(test)]
@@ -138,6 +154,9 @@ mod tests {
             }
         })
         .await;
-        assert_eq!(result, json!({"checked": 3, "failed": [{"url": "https://a/2", "status": 404}, {"url": "https://a/3", "error": "fetch failed"}]}));
+        assert_eq!(
+            serde_json::to_value(result).unwrap(),
+            serde_json::json!({"checked": 3, "failed": [{"url": "https://a/2", "status": 404}, {"url": "https://a/3", "error": "fetch failed"}]})
+        );
     }
 }

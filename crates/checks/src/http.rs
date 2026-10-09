@@ -12,7 +12,7 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 use url::Url;
 
-use crate::assets::{MAX_ASSETS, check_assets, extract_assets};
+use crate::assets::{AssetCheck, MAX_ASSETS, check_assets, extract_assets};
 use crate::blocking::{detect_block, with_user_agent};
 use crate::json::check_json;
 use crate::proxy::{env_settings, forward_refused, proxy_for, refusal, refused};
@@ -166,7 +166,7 @@ pub struct HttpRequestResult {
     pub text_match: bool,
     pub json_failure: Option<String>,
     pub block_reason: Option<&'static str>,
-    pub asset_check: Option<Value>,
+    pub asset_check: Option<AssetCheck>,
     pub page_time_ms: i64,
     /// Set when the final answer came over TLS older than 1.2 or without an AEAD cipher: the negotiated version.
     pub legacy_tls: Option<crate::tls::LegacyTls>,
@@ -497,7 +497,7 @@ pub struct HttpDetails {
     pub text_match: bool,
     pub headers: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub assets: Option<Value>,
+    pub assets: Option<AssetCheck>,
     #[serde(rename = "legacyTLS", skip_serializing_if = "Option::is_none")]
     pub legacy_tls: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
