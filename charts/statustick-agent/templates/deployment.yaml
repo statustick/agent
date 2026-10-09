@@ -1,0 +1,232 @@
+{{- $secret := required "existingSecret.name is required: create a Secret with the location token and name it here" .Values.existingSecret.name }}
+{{- $persistent := .Values.buffer.persistence.enabled }}
+{{- if gt (int .Values.replicaCount) 1 }}
+{{- fail "replicaCount must be 1: one release is one agent with its own token, and a second pod with the same token would stop the first. For a second agent, install the chart again with that agent's token." }}
+{{- end }}
+{{- if and .Values.extraCA.configMap .Values.extraCA.secret }}
+{{- fail "set extraCA.configMap or extraCA.secret, not both" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "statustick-agent.fullname" . }}
+  labels:
+    {{- include "statustick-agent.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  {{- if $persistent }}
+  strategy:
+    type: Recreate
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "statustick-agent.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "statustick-agent.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- if .Values.discovery.enabled }}
+      serviceAccountName: {{ include "statustick-agent.fullname" . }}
+      automountServiceAccountToken: true
+      {{- else }}
+      automountServiceAccountToken: false
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+        {{- if .Values.ping.enabled }}
+        sysctls:
+          - name: net.ipv4.ping_group_range
+            value: "0 2147483647"
+        {{- end }}
+      containers:
+        - name: agent
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- $context := deepCopy .Values.securityContext }}
+            {{- $add := list }}
+            {{- if .Values.ping.netRaw }}
+            {{- $add = append $add "NET_RAW" }}
+            {{- end }}
+            {{- if .Values.browser.isolation }}
+            {{- $add = concat $add (list "SETUID" "SETGID") }}
+            {{- $_ := set $context "allowPrivilegeEscalation" true }}
+            {{- end }}
+            {{- if $add }}
+            {{- $_ := set $context "capabilities" (dict "drop" (list "ALL") "add" $add) }}
+            {{- end }}
+            {{- toYaml $context | nindent 12 }}
+          ports:
+            - name: health
+              containerPort: {{ .Values.health.port }}
+              protocol: TCP
+            {{- if .Values.relay.enabled }}
+            - name: relay
+              containerPort: {{ .Values.relay.port }}
+              protocol: TCP
+            {{- end }}
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+            {{- end }}
+          env:
+            - name: STATUSTICK_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: {{ .Values.existingSecret.key }}
+            - name: STATUSTICK_URL
+              value: {{ .Values.statustick.url | quote }}
+            - name: STATUSTICK_INSTALL
+              value: helm
+            - name: STATUSTICK_BROWSER_ISOLATION
+              value: {{ .Values.browser.isolation | ternary "user" "off" | quote }}
+            {{- with .Values.statustick.concurrency }}
+            - name: STATUSTICK_CONCURRENCY
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.statustick.allow }}
+            - name: STATUSTICK_ALLOW
+              value: {{ . | quote }}
+            {{- end }}
+            - name: STATUSTICK_BUFFER_SIZE
+              value: {{ .Values.statustick.bufferSize | quote }}
+            - name: STATUSTICK_BUFFER_DIR
+              value: /var/lib/statustick
+            - name: STATUSTICK_HEALTH_PORT
+              value: {{ .Values.health.port | quote }}
+            {{- if .Values.relay.enabled }}
+            - name: STATUSTICK_RELAY_PORT
+              value: {{ .Values.relay.port | quote }}
+            {{- end }}
+            {{- if .Values.metrics.enabled }}
+            - name: METRICS_PORT
+              value: {{ .Values.metrics.port | quote }}
+            {{- end }}
+            {{- if kindIs "bool" .Values.metrics.share }}
+            - name: STATUSTICK_SHARE_METRICS
+              value: {{ .Values.metrics.share | quote }}
+            {{- end }}
+            {{- if .Values.discovery.enabled }}
+            - name: STATUSTICK_DISCOVERY
+              value: kubernetes
+            {{- with .Values.discovery.namespaces }}
+            - name: STATUSTICK_DISCOVERY_NAMESPACES
+              value: {{ join "," . | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.proxy.existingSecret.name }}
+            - name: HTTPS_PROXY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.proxy.existingSecret.name }}
+                  key: {{ .Values.proxy.existingSecret.key }}
+            {{- else if .Values.proxy.https }}
+            - name: HTTPS_PROXY
+              value: {{ .Values.proxy.https | quote }}
+            {{- end }}
+            {{- with .Values.proxy.http }}
+            - name: HTTP_PROXY
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.proxy.noProxy }}
+            - name: NO_PROXY
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if or .Values.extraCA.configMap .Values.extraCA.secret }}
+            - name: NODE_EXTRA_CA_CERTS
+              value: /etc/statustick/ca/ca.pem
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: buffer
+              mountPath: /var/lib/statustick
+            - name: tmp
+              mountPath: /tmp
+            - name: shm
+              mountPath: /dev/shm
+            {{- if or .Values.extraCA.configMap .Values.extraCA.secret }}
+            - name: extra-ca
+              mountPath: /etc/statustick/ca
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: buffer
+          {{- if $persistent }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.buffer.persistence.existingClaim | default (include "statustick-agent.fullname" .) }}
+          {{- else }}
+          emptyDir:
+            sizeLimit: {{ .Values.buffer.sizeLimit }}
+          {{- end }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 512Mi
+        {{- if .Values.extraCA.configMap }}
+        - name: extra-ca
+          configMap:
+            name: {{ .Values.extraCA.configMap }}
+            items:
+              - key: {{ .Values.extraCA.key }}
+                path: ca.pem
+        {{- else if .Values.extraCA.secret }}
+        - name: extra-ca
+          secret:
+            secretName: {{ .Values.extraCA.secret }}
+            items:
+              - key: {{ .Values.extraCA.key }}
+                path: ca.pem
+        {{- end }}
+      {{- if .Values.spreadAcrossNodes }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "statustick-agent.selectorLabels" . | nindent 14 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

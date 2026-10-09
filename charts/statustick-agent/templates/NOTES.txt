@@ -1,0 +1,26 @@
+One StatusTick agent started for {{ .Values.statustick.url }}, token from Secret "{{ .Values.existingSecret.name }}" (key "{{ .Values.existingSecret.key }}").
+
+The release is one agent of the location; its page shows the pod name as Host. Logs:
+
+  kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }} --prefix
+
+A pod is ready once StatusTick answers it. If none gets ready, run the doctor in one of them:
+
+  kubectl exec -n {{ .Release.Namespace }} deploy/{{ include "statustick-agent.fullname" . }} -- statustick-agent doctor
+{{- if .Values.relay.enabled }}
+
+Heartbeat relay: jobs inside the cluster ping
+  http://{{ include "statustick-agent.fullname" . }}-relay.{{ .Release.Namespace }}.svc:{{ .Values.relay.service.port }}/ping/<token>
+The Service is ClusterIP: keep it internal, never expose it to the internet.
+{{- end }}
+{{- if not .Values.ping.enabled }}
+
+Where the cluster gives the pods no ICMP, ping checks use a TCP connection to port 443 instead. Set ping.enabled=true
+to allow ICMP.
+{{- end }}
+{{- if .Values.discovery.enabled }}
+
+Kubernetes service discovery is on{{ with .Values.discovery.namespaces }} for namespaces {{ join ", " . }}{{ else }} for every namespace{{ end }}:
+annotate a Service with statustick.com/monitor (for example "http:/healthz" or "tcp:5432") and it gets a monitor in
+this location within a minute. The agents may only get, list and watch Services.
+{{- end }}

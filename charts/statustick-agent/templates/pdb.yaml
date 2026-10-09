@@ -1,0 +1,15 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "statustick-agent.fullname" . }}
+  labels:
+    {{- include "statustick-agent.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
+  # Agents are not ready while StatusTick is unreachable; that must not block node drains.
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels:
+      {{- include "statustick-agent.selectorLabels" . | nindent 6 }}
+{{- end }}

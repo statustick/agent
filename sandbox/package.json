@@ -1,0 +1,17 @@
+{
+  "name": "statustick-browser-sandbox",
+  "description": "What runs inside one browser check sandbox",
+  "private": true,
+  "chromium": "153.0.8010.12",
+  "scripts": {
+    "typecheck": "tsc",
+    "test": "node --test \"test/*.test.ts\""
+  },
+  "dependencies": {
+    "@playwright/test": "1.63.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.0",
+    "typescript": "~6.0.3"
+  }
+}

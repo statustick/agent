@@ -1,0 +1,23 @@
+{{- if .Values.relay.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "statustick-agent.fullname" . }}-relay
+  labels:
+    {{- include "statustick-agent.labels" . | nindent 4 }}
+  {{- with .Values.relay.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  # Agents are not ready while StatusTick is unreachable, which is when the relay buffers pings.
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "statustick-agent.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: relay
+      port: {{ .Values.relay.service.port }}
+      targetPort: relay
+      protocol: TCP
+{{- end }}

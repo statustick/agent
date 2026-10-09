@@ -1,0 +1,70 @@
+{{- if .Values.discovery.enabled }}
+{{- $fullname := include "statustick-agent.fullname" . }}
+{{- $clusterName := printf "%s-%s-discovery" $fullname .Release.Namespace | trunc 63 | trimSuffix "-" }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "statustick-agent.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+{{- if .Values.discovery.namespaces }}
+{{- range .Values.discovery.namespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fullname }}-discovery
+  namespace: {{ . }}
+  labels:
+    {{- include "statustick-agent.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fullname }}-discovery
+  namespace: {{ . }}
+  labels:
+    {{- include "statustick-agent.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $fullname }}-discovery
+subjects:
+  - kind: ServiceAccount
+    name: {{ $fullname }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- else }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $clusterName }}
+  labels:
+    {{- include "statustick-agent.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $clusterName }}
+  labels:
+    {{- include "statustick-agent.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $clusterName }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $fullname }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- end }}

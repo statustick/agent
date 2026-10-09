@@ -1,0 +1,17 @@
+{{- if and .Values.buffer.persistence.enabled (not .Values.buffer.persistence.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "statustick-agent.fullname" . }}
+  labels:
+    {{- include "statustick-agent.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- with .Values.buffer.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.buffer.persistence.size }}
+{{- end }}

@@ -1,0 +1,11 @@
+/target/
+/dist/
+node_modules/
+.DS_Store
+.env*
+
+# Local tooling
+.claude/
+.claude-flow/
+.tokensave
+ruvector.db

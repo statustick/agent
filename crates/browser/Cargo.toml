@@ -1,0 +1,18 @@
+[package]
+name = "statustick-browser"
+version = "0.1.0"
+edition = "2024"
+description = "StatusTick browser runs: checks a Playwright check, runs it in the process sandbox and builds its result"
+license = "Apache-2.0"
+repository = "https://github.com/statustick/agent"
+publish = false
+
+[dependencies]
+base64 = "0.23.1"
+fancy-regex = "0.14"
+hex = "0.4.3"
+rand = "0.10.3"
+serde_json = { version = "1.0.151", features = ["preserve_order"] }
+statustick-checks = { path = "../checks" }
+tokio = { version = "1.53.2", features = ["rt-multi-thread", "net", "time", "io-util", "macros", "process", "sync"] }
+url = "2.5.8"

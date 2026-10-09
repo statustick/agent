@@ -1,0 +1,159 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  title:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Check that the title is a Conventional Commit
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          printf '%s\n' "$TITLE" | grep -qE '^(feat|fix|perf|revert|docs|refactor|test|build|ci|chore|style)(\((agent|checks|browser|sandbox|chart|docs|deps)\))?!?: [a-z]' \
+            || { echo "Title must be type(scope): summary, e.g. 'fix(checks): retry DNS once'. See CONTRIBUTING.md."; exit 1; }
+          if printf '%s\n' "$TITLE" | grep -qE '\b[A-Z][A-Z0-9]+-[0-9]+\b'; then echo "Title must not name a tracker ticket id."; exit 1; fi
+
+  rust:
+    if: github.event.action != 'edited'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: rustup toolchain install stable --profile minimal -c clippy,rustfmt && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Database servers for the contract tests
+        run: |
+          docker run -d -p 127.0.0.1:55432:5432 -e POSTGRES_USER=statustick -e POSTGRES_PASSWORD=contract -e POSTGRES_DB=statustick postgres:18-alpine
+          docker run -d -p 127.0.0.1:56379:6379 redis:7-alpine redis-server --requirepass contract
+          docker run -d -p 127.0.0.1:57017:27017 -e MONGO_INITDB_ROOT_USERNAME=statustick -e MONGO_INITDB_ROOT_PASSWORD=contract mongo:8.0
+      - run: sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: npm ci --ignore-scripts
+        working-directory: sandbox
+      - run: cargo test --workspace --all-features
+        env:
+          CONTRACT_DATABASES: postgres=127.0.0.1:55432,redis=127.0.0.1:56379,mongodb=127.0.0.1:57017
+
+  sandbox:
+    if: github.event.action != 'edited'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: sandbox
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: sandbox/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npm run typecheck
+      - run: npm test
+
+  chart:
+    if: github.event.action != 'edited'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v4
+      - run: helm lint --strict charts/statustick-agent --set existingSecret.name=statustick-agent
+      - name: Render the optional settings
+        run: |
+          helm template t charts/statustick-agent --set existingSecret.name=s \
+            --set ping.enabled=true --set ping.netRaw=true \
+            --set proxy.existingSecret.name=proxy --set proxy.noProxy=.corp.example \
+            --set extraCA.configMap=corp-ca
+          helm template t charts/statustick-agent --set existingSecret.name=s \
+            --set replicaCount=1 --set buffer.persistence.enabled=true --set extraCA.secret=corp-ca
+          helm template t charts/statustick-agent --set existingSecret.name=s \
+            --set metrics.enabled=true --set metrics.serviceMonitor.enabled=true --set metrics.share=false
+          if helm template t charts/statustick-agent; then echo "rendered without existingSecret.name"; exit 1; fi
+          if helm template t charts/statustick-agent --set existingSecret.name=s --set replicaCount=2; then
+            echo "rendered two replicas with one token"; exit 1
+          fi
+
+  image:
+    needs: [rust, sandbox, chart]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: statustick-agent:ci
+          cache-from: type=gha,scope=agent-image
+          cache-to: type=gha,mode=max,scope=agent-image
+      - run: scripts/agent-budget.sh statustick-agent:ci
+      - run: scripts/agent-isolation.sh statustick-agent:ci
+      - run: scripts/agent-zombies.sh statustick-agent:ci
+      - run: rustup toolchain install stable --profile minimal && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: browser-contract
+      - name: Browser checks in the image
+        run: cargo test -p statustick-agent --test browser -- --ignored
+        env:
+          CONTRACT_IMAGE: statustick-agent:ci
+      - uses: azure/setup-helm@v4
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: chart
+      - name: Install the chart
+        run: |
+          kind load docker-image statustick-agent:ci --name chart
+          # Nothing listens on port 9, so the agent runs, stays alive and is not ready. With browser.isolation the
+          # agent refuses to start unless browser runs can be isolated.
+          kubectl create secret generic statustick-agent --from-literal=token=sta_live_kind_check
+          helm install statustick-agent charts/statustick-agent \
+            --set existingSecret.name=statustick-agent \
+            --set image.repository=statustick-agent --set image.tag=ci --set image.pullPolicy=Never \
+            --set statustick.url=http://127.0.0.1:9 \
+            --set ping.enabled=true --set browser.isolation=true
+      - name: Check the agent
+        run: |
+          selector=app.kubernetes.io/instance=statustick-agent
+          kubectl wait pod -l "$selector" --for=jsonpath='{.status.phase}'=Running --timeout=180s
+          [ "$(kubectl get pods -l "$selector" --no-headers | wc -l)" -eq 1 ] || { echo "expected 1 agent pod"; exit 1; }
+          kubectl get pdb statustick-agent
+          sleep 60
+          restarts=$(kubectl get pods -l "$selector" -o jsonpath='{range .items[*]}{.status.containerStatuses[0].restartCount}{"\n"}{end}' | sort -u)
+          [ "$restarts" = "0" ] || { echo "agent restarted: $restarts"; exit 1; }
+          pod=$(kubectl get pods -l "$selector" -o jsonpath='{.items[0].metadata.name}')
+          get() { kubectl exec "$pod" -- node -e "fetch('http://127.0.0.1:8080$1').then(async (r) => { process.stdout.write(await r.text()); process.exit(r.ok ? 0 : 1); })"; }
+          [ "$(get /healthz)" = "ok" ] || { echo "/healthz failed"; exit 1; }
+          if get /readyz; then echo "/readyz is ok without StatusTick"; exit 1; fi
+          [ "$(kubectl exec "$pod" -- id -u)" = "10001" ] || { echo "agent does not run as 10001"; exit 1; }
+          if kubectl exec "$pod" -- touch /agent-write-check; then echo "root file system is writable"; exit 1; fi
+          kubectl exec "$pod" -- touch /var/lib/statustick/write-check /tmp/write-check /dev/shm/write-check
+          [ "$(kubectl exec "$pod" -- df -k --output=size /dev/shm | tail -1 | tr -d ' ')" = "524288" ] || { echo "/dev/shm is not 512 MB"; exit 1; }
+          kubectl logs -l "$selector" --tail=-1 | grep -F 'Browser runs are isolated: each runs as its own user.' \
+            || { echo "the agent did not log that browser runs are isolated"; exit 1; }
+      - name: Agent logs
+        if: always()
+        run: |
+          kubectl describe pods -l app.kubernetes.io/instance=statustick-agent || true
+          kubectl logs -l app.kubernetes.io/instance=statustick-agent --prefix --tail=50 || true

@@ -1,0 +1,24 @@
+{{- if .Values.metrics.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "statustick-agent.fullname" . }}-metrics
+  labels:
+    {{- include "statustick-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metrics
+  {{- with .Values.metrics.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  # Scrape agents that are not ready too: that is when their metrics say why.
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "statustick-agent.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: metrics
+      port: {{ .Values.metrics.service.port }}
+      targetPort: metrics
+      protocol: TCP
+{{- end }}

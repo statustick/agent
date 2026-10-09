@@ -1,0 +1,205 @@
+# Comments starting with "-- " are the values table in README.md: run `UPDATE_DOCS=1 cargo test -p statustick-agent docs` after changing them.
+# "@default -- " sets the table's default when the value itself does not say it.
+
+# -- Agent replicas: must be 1, the chart refuses more. One release is one agent; for a second agent, install the chart again with that agent's token.
+replicaCount: 1
+
+image:
+  # -- The agent image. It runs every check type, browser checks included.
+  repository: ghcr.io/statustick/agent
+  # -- The image tag.
+  # @default -- the chart's `appVersion`
+  tag: ""
+  # -- The image pull policy.
+  pullPolicy: IfNotPresent
+
+# -- Pull secrets for a mirrored image.
+imagePullSecrets: []
+# -- Replaces the chart name in resource names.
+nameOverride: ""
+# -- Replaces the full resource name.
+fullnameOverride: ""
+
+# The location token, from a Secret you create (the chart never holds it):
+#   kubectl create secret generic statustick-agent --from-literal=token='sta_live_…'
+existingSecret:
+  # -- The Secret with the location token.
+  # @default -- none (required)
+  name: ""
+  # -- The key in that Secret.
+  key: token
+
+statustick:
+  # -- `STATUSTICK_URL`.
+  url: https://agent.statustick.com
+  # -- `STATUSTICK_CONCURRENCY`: checks at the same time, 1 to 50. Set here, it wins over the agent's "Max checks" in the dashboard.
+  # @default -- unset (the dashboard's setting, `5` by default)
+  concurrency: null
+  # -- `STATUSTICK_ALLOW`: the only targets the agent checks, for example `10.0.0.0/8,*.corp.example`.
+  allow: ""
+  # -- Results kept while StatusTick is unreachable.
+  bufferSize: 10000
+
+health:
+  # -- `STATUSTICK_HEALTH_PORT`: `/healthz` and `/readyz` for the probes.
+  port: 8080
+
+# The heartbeat relay: internal only, never expose it to the internet.
+relay:
+  # -- Turns on the heartbeat relay (`STATUSTICK_RELAY_PORT`) and adds a `ClusterIP` Service, `<fullname>-relay` (`statustick-agent-relay` for the install command above). See "Heartbeat relay".
+  enabled: false
+  # -- The relay's container port.
+  port: 8081
+  service:
+    # -- The relay Service port.
+    port: 8081
+    # -- The relay Service annotations.
+    annotations: {}
+
+metrics:
+  # -- Serves Prometheus metrics on `metrics.port` (`METRICS_PORT`) and adds a `ClusterIP` Service, `<fullname>-metrics`.
+  enabled: false
+  # -- The metrics container port.
+  port: 9464
+  # -- `STATUSTICK_SHARE_METRICS`: unset follows the agent's "Share health" setting in the dashboard, `true` always shares the agent's health with StatusTick, `false` never does. Works without `metrics.enabled`.
+  share: null
+  service:
+    # -- The metrics Service port.
+    port: 9464
+    # -- The metrics Service annotations.
+    annotations: {}
+  serviceMonitor:
+    # -- Adds a `ServiceMonitor` for the Prometheus Operator.
+    enabled: false
+    # -- How often Prometheus scrapes the agents.
+    interval: 30s
+    # -- Labels for the `ServiceMonitor`, for example the one your Prometheus selects.
+    labels: {}
+
+discovery:
+  # -- Turns on Kubernetes service discovery (`STATUSTICK_DISCOVERY=kubernetes`): annotated Services get monitors. Adds a ServiceAccount with read-only access to Services and mounts its token. See "Kubernetes service discovery".
+  enabled: false
+  # -- `STATUSTICK_DISCOVERY_NAMESPACES`: only these namespaces, with a Role in each instead of a ClusterRole.
+  # @default -- `[]` (every namespace)
+  namespaces: []
+
+# -- The liveness probe.
+# @default -- `/healthz`
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: health
+  initialDelaySeconds: 5
+  periodSeconds: 20
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# -- The readiness probe; `/readyz` fails while StatusTick has not answered for two minutes.
+# @default -- `/readyz`
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: health
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# -- Per replica. No memory limit: each browser run can use up to 2 GB. A limit needs room for the browser runs × 2 GB + 256 MB.
+# @default -- requests 20m CPU, 64Mi; limit 500m CPU
+resources:
+  requests:
+    cpu: 20m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+
+browser:
+  # -- Runs each browser check as its own user, so a script cannot read the agent's token or files. Adds the `SETUID` and `SETGID` capabilities and allows privilege escalation for the helper that switches user, so it is not allowed by the restricted Pod Security level (baseline allows it). See "Security".
+  isolation: false
+
+ping:
+  # -- Allows ICMP for the non-root agent with the safe sysctl `net.ipv4.ping_group_range`. Off: the agent checks a TCP connection to port 443 instead of ping. See "Ping".
+  enabled: false
+  # -- Also adds the `NET_RAW` capability, for runtimes that give it to non-root processes. Not allowed by the baseline or restricted Pod Security levels.
+  netRaw: false
+
+proxy:
+  # -- `HTTPS_PROXY`: the connection to StatusTick and HTTPS checks.
+  https: ""
+  # -- `HTTP_PROXY`: plain http checks.
+  http: ""
+  # -- `NO_PROXY`, for example `.corp.example,10.0.0.0/8`.
+  noProxy: ""
+  existingSecret:
+    # -- `HTTPS_PROXY` from this Secret instead of `proxy.https`, for a proxy URL with a password.
+    name: ""
+    # -- The key in that Secret.
+    key: https-proxy
+
+# One PEM file with extra CA certificates, from a ConfigMap or a Secret, mounted read-only and set as NODE_EXTRA_CA_CERTS.
+extraCA:
+  # -- The ConfigMap with the PEM file.
+  configMap: ""
+  # -- Or the Secret with the PEM file.
+  secret: ""
+  # -- The key of the PEM file.
+  key: ca.pem
+
+buffer:
+  # -- Size of the `emptyDir` at `/var/lib/statustick` (`STATUSTICK_BUFFER_DIR`). It keeps the offline buffer across container restarts, not when the pod is replaced.
+  sizeLimit: 128Mi
+  persistence:
+    # -- A PersistentVolumeClaim for the buffer instead, kept across pod replacements.
+    enabled: false
+    # -- An existing claim to use instead of a new one.
+    existingClaim: ""
+    # -- The storage class of the new claim.
+    storageClass: ""
+    # -- The size of the new claim.
+    size: 1Gi
+
+# -- Extra environment variables, for example `STATUSTICK_SECRET_*` database passwords with `valueFrom.secretKeyRef`.
+#   - name: STATUSTICK_SECRET_PG_PASSWORD
+#     valueFrom: {secretKeyRef: {name: pg-monitor, key: password}}
+extraEnv: []
+
+# -- The pod security context.
+# @default -- see "Security"
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+# -- The container security context.
+# @default -- see "Security"
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  capabilities:
+    drop: [ALL]
+
+podDisruptionBudget:
+  # -- Adds a PodDisruptionBudget. Not-ready agents can always be evicted, so an outage of StatusTick does not block node drains.
+  enabled: true
+  # -- Replicas that may be down at once.
+  maxUnavailable: 1
+
+# -- Prefers a different node for each replica.
+spreadAcrossNodes: true
+
+# -- Pod annotations.
+podAnnotations: {}
+# -- Pod labels.
+podLabels: {}
+# -- The usual node selector.
+nodeSelector: {}
+# -- The usual tolerations.
+tolerations: []
+# -- The usual affinity.
+affinity: {}
+# -- The pod's priority class.
+priorityClassName: ""

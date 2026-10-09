@@ -1,0 +1,12 @@
+*
+!Cargo.toml
+!Cargo.lock
+!version.txt
+!crates/*/Cargo.toml
+!crates/*/build.rs
+!crates/*/src
+!sandbox/package.json
+!sandbox/package-lock.json
+!sandbox/*.mts
+!sandbox/*.cts
+!sandbox/playwright.config.ts
