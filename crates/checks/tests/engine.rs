@@ -918,11 +918,20 @@ fn public_targets() {
 }
 
 #[test]
-#[ignore = "engine bug: TXT records are lists of strings, so expectedValue never matches; an SOA answer is one object, so it is never up"]
-fn public_txt_value_and_soa() {
+#[ignore = "needs the internet"]
+fn public_txt_value() {
     fixtures(false);
-    expect_all(vec![
-        ("public dns TXT", "dns", json!({ "hostname": "google.com", "recordType": "TXT", "expectedValue": "v=spf1" }), vec![("status", json!("up"))]),
-        ("public dns SOA", "dns", json!({ "hostname": "github.com", "recordType": "SOA" }), vec![("status", json!("up"))]),
-    ]);
+    expect_all(vec![(
+        "public dns TXT",
+        "dns",
+        json!({ "hostname": "google.com", "recordType": "TXT", "expectedValue": "v=spf1" }),
+        vec![("status", json!("up"))],
+    )]);
+}
+
+#[test]
+#[ignore = "engine bug: an SOA answer is one object, so it is never up"]
+fn public_soa() {
+    fixtures(false);
+    expect_all(vec![("public dns SOA", "dns", json!({ "hostname": "github.com", "recordType": "SOA" }), vec![("status", json!("up"))])]);
 }

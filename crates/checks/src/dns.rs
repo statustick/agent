@@ -130,6 +130,15 @@ pub async fn resolve_dns(hostname: &str, record_type: &str, timeout: Duration) -
     Ok(records)
 }
 
+/// The text of one record for `expectedValue`: the record itself, or a TXT record's strings joined as one value.
+fn record_text(record: &Value) -> Option<String> {
+    match record {
+        Value::String(text) => Some(text.clone()),
+        Value::Array(chunks) => Some(chunks.iter().filter_map(Value::as_str).collect()),
+        _ => None,
+    }
+}
+
 /// A DNS answer is up when it has records; an SOA answer is one object, which has no length.
 pub fn has_records(records: &Value) -> bool {
     records.as_array().is_some_and(|items| !items.is_empty())
@@ -150,7 +159,7 @@ pub async fn dns_check(request: &Map<String, Value>) -> Value {
                 has_expected = items.iter().any(|item| Some(item) == expected_ip.as_ref());
             }
             if let (true, Some(items), Some(wanted)) = (truthy(expected_value.as_ref()), records.as_array(), string_field(request, "expectedValue")) {
-                has_expected = items.iter().any(|item| item.as_str().is_some_and(|text| text.contains(&wanted)));
+                has_expected = items.iter().any(|item| record_text(item).is_some_and(|text| text.contains(&wanted)));
             }
             let mut result = Map::new();
             result.insert("hostname".into(), hostname);
@@ -188,5 +197,17 @@ pub async fn dns_check(request: &Map<String, Value>) -> Value {
             }
             Value::Object(result)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn joins_the_strings_of_a_txt_record() {
+        assert_eq!(record_text(&json!(["v=spf1 include:_spf.example.com", " ~all"])).as_deref(), Some("v=spf1 include:_spf.example.com ~all"));
+        assert_eq!(record_text(&json!("192.0.2.1")).as_deref(), Some("192.0.2.1"));
+        assert_eq!(record_text(&json!({ "exchange": "mx.example.com", "priority": 10 })), None);
     }
 }
