@@ -80,11 +80,17 @@ pub async fn run_job(job: &Value) -> Value {
         return json!({ "leaseId": lease_id, "result": error_result(&problem) });
     }
     let mut answer = run_check(&kind, &check).await.as_object().cloned().unwrap_or_default();
+    let mut header_failed = false;
     if kind == "http"
         && let (Some(Value::Object(expected)), Some(Value::Object(details))) = (check.get("expectedHeaders"), answer.get_mut("details"))
     {
         let headers = details.get("headers").and_then(Value::as_object).cloned().unwrap_or_default();
-        details.insert("headerMismatch".into(), header_mismatch(expected, &headers));
+        let mismatch = header_mismatch(expected, &headers);
+        header_failed = !mismatch.is_null();
+        details.insert("headerMismatch".into(), mismatch);
+    }
+    if header_failed && answer.get("status").and_then(Value::as_str) == Some("up") {
+        answer.insert("status".into(), Value::from("down"));
     }
     json!({ "leaseId": lease_id, "result": for_platform(only_documented_fields(&kind, &answer)) })
 }

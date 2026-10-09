@@ -351,7 +351,7 @@ Rules for `result`: `status` is `up`, `down`, `blocked` or `error`; `responseTim
 type: `http` `httpStatus`, `details.textMatch`, `details.headerMismatch`; `tcp` `errorCode`; `ping` `packetLoss`,
 `details.alive|min|max|avg|stddev`; `dns` `records`, `recordCount`, `errorCode`. Response bodies and header values are
 never sent: the agent compares the job's `expectedHeaders` itself and answers `details.headerMismatch`, null when
-all match, else `{name, reason}` with `reason` `missing` or `different`. JSON assertions (`json`) run on the
+all match, else `{name, reason}` with `reason` `missing` or `different`, and the check is then `down`. JSON assertions (`json`) run on the
 agent too; a failure is `down` with an `error` that names the path (`JSON path $.status is not the expected value`),
 never a value from the body.
 
