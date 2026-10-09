@@ -1,23 +1,31 @@
 # statustick-agent Helm chart
 
-Runs the StatusTick private agent in Kubernetes: a Deployment with one agent pod for one private location, with a PodDisruptionBudget. The agent connects out to `agent.statustick.com` over HTTPS; nothing calls it from outside the cluster. The image is the same for every check type: browser checks need no other image or install, and Chromium runs only while a browser check runs.
+Runs one StatusTick agent in Kubernetes: a Deployment with one pod and a PodDisruptionBudget. The agent connects out to `agent.statustick.com`; nothing calls it from outside the cluster.
 
 ## Install
 
-Create a private location in StatusTick and copy its token. Put the token in a Secret (the chart never takes the token itself), then install the chart from GHCR:
+Add an agent to a private location in StatusTick and copy its token. Put the token in a Secret, then install the chart:
 
 ```bash
 kubectl create namespace statustick
 kubectl create secret generic statustick-agent -n statustick --from-literal=token='sta_live_…'
-helm install statustick-agent oci://ghcr.io/statustick/charts/statustick-agent --version 0.1.0 \
+helm install statustick-agent oci://ghcr.io/statustick/charts/statustick-agent \
   -n statustick --set existingSecret.name=statustick-agent --set browser.isolation=true
 ```
 
-Upgrade with `helm upgrade statustick-agent oci://ghcr.io/statustick/charts/statustick-agent --version <new version> -n statustick --reuse-values`. To rotate the token, update the Secret and restart the pods: `kubectl rollout restart -n statustick deploy/statustick-agent`.
+To upgrade, run `helm upgrade` with `--reuse-values`. To change the token, update the Secret and run `kubectl rollout restart -n statustick deploy/statustick-agent`.
 
-One release is one agent with its own token, so `replicaCount` stays 1 and the chart refuses more: a second pod with the same token would stop the first (StatusTick keeps the newest connection; the older agent logs it, stops taking checks and turns not ready). For two agents, install the chart twice, under two release names with two agents' tokens; StatusTick spreads the location's checks over its agents. A replaced pod is the same agent again.
+One release is one agent, so the chart refuses more than one replica: a second pod with the same token would stop the first. For two agents, install the chart twice with two tokens.
 
-The pod gets a 512 MB in-memory `/dev/shm` for Chromium and no memory limit, because each browser run can use up to 2 GB. `BROWSER_CONCURRENCY` (through `extraEnv`) sets the browser runs on the machine and wins over the agent's setting in the dashboard; `0` turns browser checks off.
+Notes:
+
+- `browser.isolation: true` runs each browser check as its own user, so a script cannot read the agent's token. It adds the `SETUID` and `SETGID` capabilities and allows privilege escalation, which the baseline Pod Security level allows and the restricted one does not. Without it, browser checks run as the agent's user.
+- The pod has a 512 MB in-memory `/dev/shm` for Chromium and no memory limit, because a browser run can use up to 2 GB.
+- `relay.enabled` adds a `ClusterIP` Service for the heartbeat relay. Keep it internal; never expose it through a public Ingress or load balancer.
+- `discovery.enabled` adds a ServiceAccount that can only `get`, `list` and `watch` Services, and mounts its token. Without it, the pod gets no service account token.
+- The offline buffer is an `emptyDir`. Set `buffer.persistence.enabled` to keep it on a volume.
+
+See [the agent guide](https://github.com/statustick/agent/blob/main/docs/agent.md) for what each setting does.
 
 ## Values
 
@@ -84,63 +92,3 @@ The pod gets a 512 MB in-memory `/dev/shm` for Chromium and no memory limit, bec
 | `affinity` | none | The usual affinity. |
 | `priorityClassName` | none | The pod's priority class. |
 <!-- settings:end -->
-
-## Security
-
-- The pods run as user `10001` with a read-only root file system, no privilege escalation, the `RuntimeDefault` seccomp profile and all capabilities dropped. They get no service account token, except with `discovery.enabled` (see below).
-- `browser.isolation: true` runs each browser check as its own user, so a script cannot read the agent's token, its `STATUSTICK_SECRET_*` values or its files. It adds the `SETUID` and `SETGID` capabilities (all others stay dropped) and sets `allowPrivilegeEscalation: true`, which the helper that switches user needs; the agent itself stays user `10001`. The baseline Pod Security level allows this, the restricted level does not, so it is off by default: browser checks then run as the agent's user. Turn it on wherever the namespace allows it, or set "Browser runs" to Off for agents that should never run a script.
-- Writable folders are `emptyDir` volumes: `/var/lib/statustick` (the offline buffer), `/tmp` (1 GiB, also each browser run's work folder) and `/dev/shm` (512 MiB, in memory).
-- The only port is the health port. It answers `/healthz` and `/readyz` with `ok`, `paused` or `not connected to StatusTick` and nothing else. With `relay.enabled` the relay port is added (see below), and with `metrics.enabled` the metrics port, which serves only `GET /metrics`.
-
-## Heartbeat relay
-
-With `relay.enabled: true` jobs that cannot reach the internet ping the agents instead: `http://statustick-agent-relay.<namespace>.svc:8081/ping/<token>` (and `/start`, `/fail`), the path of the public ping URL. The Service sends pings to the agent's pod even while it is not ready (an agent is not ready while StatusTick is unreachable, and then buffers the pings); it forwards them to StatusTick. The Service is `ClusterIP` on purpose: keep the relay internal and never put it behind a public Ingress or a public `LoadBalancer`. For jobs outside the cluster, use an internal load balancer and restrict who can reach it. Behind a Service the rate limit of 600 pings a minute counts per connecting address, which kube-proxy can rewrite to a node address; keep that in mind with many jobs on one node. See "Heartbeat relay" in `docs/agent.md` for the answers and limits.
-
-## Kubernetes service discovery
-
-With `discovery.enabled: true` the agents watch the cluster's Services, and each Service with a `statustick.com/monitor` annotation gets a monitor in this location within a minute, checked by these agents:
-
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: api
-  namespace: shop
-  annotations:
-    statustick.com/monitor: "http:/healthz"   # GET http://api.shop.svc:8080/healthz
-    statustick.com/name: "Shop API"           # optional, default "shop/api"
-    statustick.com/interval: "60"             # optional seconds (or "5m", "1h"), 30 to 86400, default 60
-spec:
-  ports:
-    - name: http
-      port: 8080
-```
-
-| Annotation value | Monitor |
-| -- | -- |
-| `http:/healthz` | HTTP `http://<service>.<namespace>.svc:<first port>/healthz` |
-| `http:8081/ready`, `http:metrics/ready` | HTTP on port 8081, or on the Service port named `metrics` |
-| `http` | HTTP `/` on the first port |
-| `tcp:5432`, `tcp` | TCP connection to `<service>.<namespace>.svc:5432`, or to the first port |
-
-Changing an annotation updates the monitor. Removing the annotation or the Service pauses the monitor; its history stays, and it resumes when the annotation comes back. Discovered monitors are marked as managed by Kubernetes in StatusTick: their check is changed only through the annotation, while alert settings (alert policy, notification delay, mute) stay editable in the dashboard. A location takes at most 100 discovered monitors unless StatusTick raised its limit; the agents log the Services over the limit.
-
-RBAC: the chart adds a ServiceAccount and binds it to a ClusterRole (or, with `discovery.namespaces`, a Role in each listed namespace) that allows only `get`, `list` and `watch` on `services`; nothing else, and no Secrets. Only then does the pod mount a service account token (`automountServiceAccountToken: true`); with discovery off it stays `false`. The agents call the API server directly, never through `proxy.https`. With `statustick.allow`, add `*.svc` (or your Service CIDR) so the checks of discovered monitors are allowed.
-
-Watch one cluster per location: agents of the same location in another cluster would pause each other's monitors. See "Kubernetes service discovery" in `docs/agent.md` for the details.
-
-## Ping
-
-Ping needs ICMP. A non-root process can send it only through unprivileged ICMP sockets, which the pod's `net.ipv4.ping_group_range` sysctl allows. `ping.enabled: true` sets it; it is a safe sysctl, allowed at every Pod Security level. Some runtimes (containerd 2, Docker) allow it by default already.
-
-Where the agent gets no ICMP, it checks a TCP connection to port 443 of the host instead: a host that accepts or refuses the connection is up. It logs this once, and each such result says so in `details.note` (`details.method` is `tcp`).
-
-`ping.netRaw: true` adds `NET_RAW` as well. Most runtimes do not give added capabilities to a non-root process, and the baseline and restricted Pod Security levels refuse it, so use it only when you know your runtime needs it.
-
-## Offline buffer
-
-The buffer is an `emptyDir`: it survives a container restart, not a pod replacement. You can keep it on a PersistentVolumeClaim (`buffer.persistence.enabled: true`); the Deployment then uses the `Recreate` strategy so two pods never share the volume. The volume holds the jobs the agent repeats offline, including HTTP request headers and bodies, so keep it private to the agent.
-
-## Releases
-
-The chart is published to `oci://ghcr.io/statustick/charts/statustick-agent` by release-please: merging its release pull request for the chart tags `chart-vX.Y.Z` and the `Release` workflow (`.github/workflows/release.yml`) pushes it. Pull requests and pushes to `main` run `helm lint` and an install test on kind (`.github/workflows/ci.yml`), and the agent's tests fail when `appVersion` is not the agent version in `version.txt`; release-please sets both, so the default image tag is always a released one.
