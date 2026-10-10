@@ -1,28 +1,47 @@
-//! DNS checks: one query to the system's name servers, no cache and no search list.
+//! DNS checks: one query to the system's name servers, no cache and no search list, or to the zone's own name servers.
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use hickory_resolver::config::ResolveHosts;
 use hickory_resolver::net::{DnsError, NetError};
-use hickory_resolver::proto::op::ResponseCode;
+use hickory_resolver::proto::op::{Edns, Message, Query, ResponseCode};
 use hickory_resolver::proto::rr::Name;
-use hickory_resolver::proto::rr::{RData, RecordType};
+use hickory_resolver::proto::rr::{RData, Record, RecordType};
 use hickory_resolver::{Resolver, TokioResolver};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpStream, UdpSocket};
 
-use crate::targets::{refused_answer, target_not_allowed};
+use crate::targets::{is_blocked_address, refused_answer, target_not_allowed};
 use crate::util::{Failure, elapsed_ms, now_iso, string_field, timeout_field, truthy};
 
+static AUTHORITATIVE: AtomicBool = AtomicBool::new(false);
+
+/// Drones only: private agents need the system resolver for internal names.
+pub fn set_authoritative_dns(on: bool) {
+    AUTHORITATIVE.store(on, Ordering::Relaxed);
+}
+
+fn system_resolver(cache_size: u64) -> TokioResolver {
+    let mut builder = Resolver::builder_tokio().expect("system DNS configuration");
+    let options = builder.options_mut();
+    options.cache_size = cache_size;
+    options.use_hosts_file = ResolveHosts::Never;
+    options.ndots = 0;
+    builder.build().expect("DNS resolver")
+}
+
 fn resolver() -> &'static TokioResolver {
-    static RESOLVER: LazyLock<TokioResolver> = LazyLock::new(|| {
-        let mut builder = Resolver::builder_tokio().expect("system DNS configuration");
-        let options = builder.options_mut();
-        options.cache_size = 0;
-        options.use_hosts_file = ResolveHosts::Never;
-        options.ndots = 0;
-        builder.build().expect("DNS resolver")
-    });
+    static RESOLVER: LazyLock<TokioResolver> = LazyLock::new(|| system_resolver(0));
+    &RESOLVER
+}
+
+/// Finds zones and name servers; cached, and not part of the response time.
+fn discovery() -> &'static TokioResolver {
+    static RESOLVER: LazyLock<TokioResolver> = LazyLock::new(|| system_resolver(1024));
     &RESOLVER
 }
 
@@ -59,9 +78,107 @@ fn failure_of(error: &NetError, record_type: &str, hostname: &str) -> Failure {
     Failure::coded(format!("{} {code} {hostname}", query_name(record_type)), code)
 }
 
+/// The closest zone at or above [name] with NS records, never a top-level domain.
+async fn zone_servers(name: &Name) -> Result<Vec<Name>, &'static str> {
+    let mut zone = name.clone();
+    while zone.num_labels() >= 2 {
+        let hosts: Vec<Name> = match discovery().lookup(zone.clone(), RecordType::NS).await {
+            Ok(lookup) => lookup
+                .answers()
+                .iter()
+                .filter(|record| record.name == zone)
+                .filter_map(|record| match &record.data {
+                    RData::NS(ns) => Some(ns.0.clone()),
+                    _ => None,
+                })
+                .collect(),
+            Err(NetError::Dns(DnsError::NoRecordsFound(_))) => Vec::new(),
+            Err(_) => return Err("ESERVFAIL"),
+        };
+        if !hosts.is_empty() {
+            return Ok(hosts);
+        }
+        zone = zone.base_name();
+    }
+    Err("ENOTFOUND")
+}
+
+async fn exchange(server: SocketAddr, query: &[u8], id: u16) -> std::io::Result<Message> {
+    let local: IpAddr = if server.is_ipv4() { Ipv4Addr::UNSPECIFIED.into() } else { Ipv6Addr::UNSPECIFIED.into() };
+    let socket = UdpSocket::bind((local, 0)).await?;
+    socket.connect(server).await?;
+    socket.send(query).await?;
+    let mut buffer = vec![0; 4096];
+    let response = loop {
+        let size = socket.recv(&mut buffer).await?;
+        if let Ok(message) = Message::from_vec(&buffer[..size])
+            && message.metadata.id == id
+        {
+            break message;
+        }
+    };
+    if !response.metadata.truncation {
+        return Ok(response);
+    }
+    let mut stream = TcpStream::connect(server).await?;
+    stream.write_all(&(query.len() as u16).to_be_bytes()).await?;
+    stream.write_all(query).await?;
+    let mut body = vec![0; usize::from(stream.read_u16().await?)];
+    stream.read_exact(&mut body).await?;
+    Message::from_vec(&body).map_err(std::io::Error::other)
+}
+
+/// Asks the zone's name servers in turn, without recursion, and follows a CNAME into another zone. The time is only the
+/// time the name servers took.
+async fn authoritative_answers(mut name: Name, kind: RecordType) -> Result<(Vec<Record>, Duration), &'static str> {
+    let mut answers = Vec::new();
+    let mut took = Duration::ZERO;
+    for _ in 0..8 {
+        let mut query = Message::query();
+        query.add_query(Query::query(name.clone(), kind));
+        query.metadata.recursion_desired = false;
+        query.edns = Some(Edns::new());
+        let bytes = query.to_vec().map_err(|_| "EBADNAME")?;
+        let mut response = None;
+        'servers: for host in zone_servers(&name).await? {
+            let Ok(addresses) = discovery().lookup_ip(host).await else { continue };
+            let mut addresses: Vec<IpAddr> = addresses.iter().filter(|address| !is_blocked_address(*address)).collect();
+            addresses.sort_by_key(IpAddr::is_ipv6);
+            for address in addresses {
+                let start = Instant::now();
+                let answer = tokio::time::timeout(Duration::from_secs(2), exchange(SocketAddr::new(address, 53), &bytes, query.metadata.id)).await;
+                took += start.elapsed();
+                if let Ok(Ok(answer)) = answer {
+                    response = Some(answer);
+                    break 'servers;
+                }
+            }
+        }
+        let response = response.ok_or("ETIMEOUT")?;
+        match response.metadata.response_code {
+            ResponseCode::NoError => {}
+            ResponseCode::NXDomain => return Err("ENOTFOUND"),
+            ResponseCode::Refused => return Err("EREFUSED"),
+            _ => return Err("ESERVFAIL"),
+        }
+        let found = response.answers.iter().any(|record| record.record_type() == kind);
+        let alias = response.answers.iter().rev().find_map(|record| match &record.data {
+            RData::CNAME(cname) => Some(cname.0.clone()),
+            _ => None,
+        });
+        answers.extend(response.answers);
+        match alias {
+            Some(target) if !found && kind != RecordType::CNAME => name = target,
+            _ => return Ok((answers, took)),
+        }
+    }
+    Err("ESERVFAIL")
+}
+
 /// The records for [hostname] in the shapes StatusTick reads: strings for A, AAAA, CNAME and NS, `{exchange, priority}` for MX,
 /// arrays of strings for TXT, one SOA object, `{critical, <tag>: value}` for CAA.
-pub async fn resolve_dns(hostname: &str, record_type: &str, timeout: Duration) -> Result<Value, Failure> {
+/// With the time of the zone's name servers when they were asked directly.
+pub async fn resolve_dns(hostname: &str, record_type: &str, timeout: Duration) -> Result<(Value, Option<Duration>), Failure> {
     let upper = record_type.to_uppercase();
     let kind = match upper.as_str() {
         "A" => RecordType::A,
@@ -76,12 +193,20 @@ pub async fn resolve_dns(hostname: &str, record_type: &str, timeout: Duration) -
     };
     let fqdn = if hostname.ends_with('.') { hostname.to_string() } else { format!("{hostname}.") };
     let name = Name::from_utf8(&fqdn).map_err(|_| Failure::coded(format!("{} EBADNAME {hostname}", query_name(&upper)), "EBADNAME"))?;
-    let lookup = match tokio::time::timeout(timeout, resolver().lookup(name, kind)).await {
-        Err(_) => return Err(Failure::plain("DNS timeout")),
-        Ok(Err(error)) => return Err(failure_of(&error, &upper, hostname)),
-        Ok(Ok(lookup)) => lookup,
+    let (answers, took) = if AUTHORITATIVE.load(Ordering::Relaxed) {
+        match tokio::time::timeout(timeout, authoritative_answers(name, kind)).await {
+            Err(_) => return Err(Failure::plain("DNS timeout")),
+            Ok(Err(code)) => return Err(Failure::coded(format!("{} {code} {hostname}", query_name(&upper)), code)),
+            Ok(Ok((answers, took))) => (answers, Some(took)),
+        }
+    } else {
+        match tokio::time::timeout(timeout, resolver().lookup(name, kind)).await {
+            Err(_) => return Err(Failure::plain("DNS timeout")),
+            Ok(Err(error)) => return Err(failure_of(&error, &upper, hostname)),
+            Ok(Ok(lookup)) => (lookup.answers().to_vec(), None),
+        }
     };
-    let data: Vec<&RData> = lookup.answers().iter().filter(|record| record.record_type() == kind).map(|record| &record.data).collect();
+    let data: Vec<&RData> = answers.iter().filter(|record| record.record_type() == kind).map(|record| &record.data).collect();
     let records: Value = match kind {
         RecordType::SOA => match data.first() {
             Some(RData::SOA(soa)) => json!({
@@ -127,7 +252,7 @@ pub async fn resolve_dns(hostname: &str, record_type: &str, timeout: Duration) -
             return Err(target_not_allowed());
         }
     }
-    Ok(records)
+    Ok((records, took))
 }
 
 /// The text of one record for `expectedValue`: the record itself, or a TXT record's strings joined as one value.
@@ -192,8 +317,10 @@ pub async fn dns_check(request: &Map<String, Value>) -> Value {
         hostname,
         record_type,
     };
+    let mut took = None;
     match resolve_dns(result.hostname.as_str().unwrap_or(""), result.record_type.as_str().unwrap_or("A"), timeout).await {
-        Ok(records) => {
+        Ok((records, time)) => {
+            took = time;
             let mut has_expected = true;
             if let (true, Some(items)) = (truthy(expected_ip.as_ref()), records.as_array()) {
                 has_expected = items.iter().any(|item| Some(item) == expected_ip.as_ref());
@@ -218,7 +345,7 @@ pub async fn dns_check(request: &Map<String, Value>) -> Value {
             result.error_code = failure.code;
         }
     }
-    result.response_time = elapsed_ms(start);
+    result.response_time = took.map_or_else(|| elapsed_ms(start), |time| time.as_millis() as i64);
     result.timestamp = now_iso();
     serde_json::to_value(result).expect("serializable result")
 }
