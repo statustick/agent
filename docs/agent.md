@@ -1,14 +1,13 @@
 # Private agent
 
-The agent runs inside your network and checks what StatusTick's public locations cannot reach. A private location is a group of agents. The agents share the location's checks and take over when one of them stops.
-
-Each agent has its own token. With the token, the agent connects out to `agent.statustick.com` on port 443, asks for checks, runs them and sends the results back. That is the only host your firewall needs to allow. Nothing connects to the agent.
+The agent runs inside your network and checks what StatusTick's public locations can't reach. A private location is
+a group of agents that share its checks and take over when one stops. Each agent connects out to
+`agent.statustick.com:443` with its own token; nothing connects to the agent.
 
 ## Install
 
-In StatusTick, open the private location, choose **Add agent** and give it a name. You get an install command with the agent's token. The token is shown only once. Run the command on the machine; the page shows the agent as connected within a few seconds.
-
-One token is for one machine. For a second machine, add a second agent. If two machines use the same token, the newer one wins and the older one stops.
+In StatusTick, open the private location, choose **Add agent** and run the install command it shows. The token is
+shown once and belongs to one machine: if two machines use it, the newer one wins.
 
 ### Docker
 
@@ -35,17 +34,14 @@ services:
     cap_add: [SETUID, SETGID]
 ```
 
-- One image runs every check type, browser checks included. It is about 330 MB to download.
-- Chromium only runs while a browser check runs.
-- `--shm-size 512m` is for Chromium. It crashes with Docker's default of 64 MB.
-- `SETUID` and `SETGID` let the agent run each browser check as a separate user. All other capabilities are dropped.
-- The agent runs as user `10001`. It works with a read-only root file system if `/tmp` stays writable: `--read-only --tmpfs /tmp`.
+The image (about 330 MB) runs every check type, browser checks included. Chromium needs `--shm-size 512m`;
+`SETUID` and `SETGID` let each browser check run as its own user. The agent runs as user `10001` and works with
+`--read-only --tmpfs /tmp`.
 
 ### Binary
 
-Without Docker, use the static binary for Linux (`amd64` or `arm64`). It runs every check type except browser checks, which need the image. Download it from a [release](https://github.com/statustick/agent/releases) and check it against `SHA256SUMS`.
-
-To run it as a systemd service:
+The static Linux binary (`amd64`, `arm64`) runs everything except browser checks. Download it from a
+[release](https://github.com/statustick/agent/releases), check it against `SHA256SUMS`, and run it as a service:
 
 ```bash
 sudo install -m 0755 statustick-agent /usr/local/bin/statustick-agent
@@ -78,11 +74,9 @@ sudo systemctl daemon-reload && sudo systemctl enable --now statustick-agent
 
 ### Kubernetes
 
-Use the [Helm chart](../charts/statustick-agent/README.md). One release is one agent.
+Use the [Helm chart](../charts/statustick-agent/README.md); one release is one agent.
 
 ## Settings
-
-Set these as environment variables.
 
 <!-- settings:start -->
 | Variable | Type | Default | Values | What it does |
@@ -113,56 +107,48 @@ Set these as environment variables.
 | `STATUSTICK_SECRET_<NAME>_HOSTS` | list | none | as `STATUSTICK_ALLOW` | Hosts that may receive `STATUSTICK_SECRET_<NAME>`. See "Database checks". |
 <!-- settings:end -->
 
-Lower-case `https_proxy`, `http_proxy` and `no_proxy` work too, and win over the upper-case names.
+Lower-case `https_proxy`, `http_proxy` and `no_proxy` work too and win over the upper-case names.
 
-### Settings in the dashboard
+Owners and admins can change four settings on the agent's page; the agent picks them up within about 30 seconds. A
+variable set on the machine wins, and the dashboard shows the setting as locked.
 
-Owners and admins can change four settings on the agent's page. A change reaches the agent within about 30 seconds, without a restart.
-
-| Setting | Values | Variable that overrides it |
+| Dashboard setting | Values | Variable |
 | -- | -- | -- |
-| Browser runs | Off, or 1 to 8 browser checks at once (default 1) | `BROWSER_CONCURRENCY` |
-| Max checks | 1 to 50 checks at once (default 5) | `STATUSTICK_CONCURRENCY` |
-| Paused | The agent stays connected but takes no new checks | none |
-| Share health | Sends the agent's metrics to StatusTick (see [Metrics](#metrics)) | `STATUSTICK_SHARE_METRICS` |
-
-If the variable is set on the machine, it wins. The dashboard then shows the setting as locked.
+| Browser runs | Off or 1 to 8 (default 1) | `BROWSER_CONCURRENCY` |
+| Max checks | 1 to 50 (default 5) | `STATUSTICK_CONCURRENCY` |
+| Paused | Connected but takes no checks | |
+| Share health | Sends metrics to StatusTick | `STATUSTICK_SHARE_METRICS` |
 
 ## Token
 
-On the agent's page, an owner or admin can:
-
-- **Rotate** the token. The old token keeps working for 60 minutes, so you have time to update the machine. After that, the agent logs `Token rotated` and retries until it is restarted with the new token.
-- **End now**: stop the old token before the 60 minutes are over.
-- **Revoke** a leaked token. It stops at once. Rotate to get a new one.
-
-To rotate many agents, do one at a time: rotate, set the new token on the machine, restart the agent, check on its page that the new token is in use, then choose **End now**.
+On the agent's page: **Rotate** (the old token works for 60 more minutes), **End now** (stop the old token early),
+**Revoke** (stops a leaked token at once). With many agents, rotate one at a time and choose **End now** after the
+agent's page shows the new token in use.
 
 ## Target rules
 
-The agent may reach private and internal addresses. That is what it is for. Two rules apply:
-
-- Cloud metadata addresses (`169.254.169.254`, `fd00:ec2::254`) are always refused, unless you list them in `STATUSTICK_ALLOW`.
-- If `STATUSTICK_ALLOW` is set, the agent only checks targets on that list. The list lives on your machine, so nobody with access to StatusTick can change it.
+The agent may reach private addresses; that is its job. Cloud metadata (`169.254.169.254`, `fd00:ec2::254`) is
+refused unless listed in `STATUSTICK_ALLOW`. With `STATUSTICK_ALLOW` set, only listed targets are checked. The list
+lives on your machine, so nobody in StatusTick can change it.
 
 ## Browser checks
 
-Every agent that runs the image can run Playwright browser checks. There is nothing extra to install.
-
-- Each run is a separate process with a fresh browser and its own work folder. A run stops after 2 minutes.
-- Plan for up to 2 GB of memory per browser run at once, plus 256 MB for the agent. The install commands set no memory limit. If you set one, leave that much room.
-- The browser and the script follow the same target rules as other checks. Any other request fails the run with `target not allowed by agent policy`.
-- Each run runs as its own user, so a script cannot read the agent's token, its `STATUSTICK_SECRET_*` values or its files. This needs the `SETUID` and `SETGID` capabilities and no `no-new-privileges` option. The agent logs at start whether runs are isolated. If the container does not allow it, runs share the agent's user. `STATUSTICK_BROWSER_ISOLATION=user` makes the agent refuse to start in that case.
-- The screenshot and trace of a run are uploaded to StatusTick. Error texts are cut to 200 characters and step titles to 120.
-- If an agent should never run a script, set **Browser runs** to Off, or `BROWSER_CONCURRENCY=0`.
+- Each run is its own process, browser and work folder, stopped after 2 minutes.
+- Allow up to 2 GB of memory per concurrent run plus 256 MB for the agent.
+- The browser and the script follow the target rules; other requests fail with `target not allowed by agent policy`.
+- Each run is its own user, so a script can't read the agent's token, secrets or files. The agent logs at start
+  whether runs are isolated; `STATUSTICK_BROWSER_ISOLATION=user` makes it refuse to start when they can't be.
+- The screenshot and trace are uploaded to StatusTick.
+- Turn browser checks off with **Browser runs** Off or `BROWSER_CONCURRENCY=0`.
 
 ## Database checks
 
-Private agents can check PostgreSQL, MySQL and MariaDB, Redis and MongoDB. The agent connects, logs in and runs one read-only command: `SELECT 1`, `PING` or MongoDB's `ping`. For PostgreSQL and MySQL you can set your own query. It runs in a read-only transaction with a timeout and is rolled back. Only the first value of the first row is compared with the expected value.
+PostgreSQL, MySQL/MariaDB, Redis and MongoDB: connect, log in, run one read-only command (`SELECT 1`, `PING`,
+`ping`) or, for PostgreSQL and MySQL, your query in a read-only transaction that is rolled back. Only the one value
+compared with your expected value leaves the network.
 
-Nothing from the database leaves your network except, when you set an expected value, the one value the check compared.
-
-Keep passwords on the agent instead of in StatusTick. Put them in variables that start with `STATUSTICK_SECRET_`, and name the variable in the monitor (`passwordEnv`). The agent reads no other variable for a check. Bind each secret to the hosts it is for:
+Keep passwords on the agent in `STATUSTICK_SECRET_*` variables, name them in the monitor (`passwordEnv`), and bind
+each to its hosts:
 
 ```bash
 -e STATUSTICK_SECRET_PG_PASSWORD="…" \
@@ -170,9 +156,8 @@ Keep passwords on the agent instead of in StatusTick. Put them in variables that
 -e STATUSTICK_REQUIRE_SECRET_HOSTS=true
 ```
 
-With a `_HOSTS` list, a check that would send the secret to another host fails with `SECRET_NOT_ALLOWED` before the agent connects. This matters because some protocols send the password itself, for example Redis `AUTH`. `STATUSTICK_REQUIRE_SECRET_HOSTS=true` refuses every secret without a list.
-
-Give the agent a database user with as few rights as possible:
+A check that would send the secret elsewhere fails with `SECRET_NOT_ALLOWED` before connecting. Use a database user
+with minimal rights:
 
 ```sql
 -- PostgreSQL
@@ -189,7 +174,7 @@ GRANT USAGE ON *.* TO 'statustick'@'%';
 ACL SETUSER statustick on >… -@all +ping
 ```
 
-For a custom query, also grant `SELECT` on the tables it reads.
+Grant `SELECT` on the tables a custom query reads.
 
 ## Behind a proxy or with your own CA
 
@@ -200,29 +185,24 @@ For a custom query, also grant `SELECT` on the tables it reads.
 -v /etc/company/ca.pem:/certs/ca.pem:ro
 ```
 
-- The agent reaches StatusTick through the proxy, unless `NO_PROXY` matches `agent.statustick.com`.
-- HTTP checks use the proxy too, unless the target matches `NO_PROXY`. Other check types always connect directly.
-- The agent still resolves each target itself to apply the target rules, so it needs working DNS.
-- If the proxy refuses the connection, the agent logs the proxy and the HTTP status. `407` means the user name or password is wrong.
-- `NODE_EXTRA_CA_CERTS` adds CA certificates, for example a TLS-inspecting proxy's. The agent does not start if the file cannot be read.
+The connection to StatusTick and HTTP checks use the proxy unless `NO_PROXY` matches; other checks connect directly.
+The agent still resolves targets itself, so it needs DNS. A proxy refusal is logged with its status (`407`: wrong
+credentials). The agent doesn't start if `NODE_EXTRA_CA_CERTS` can't be read.
 
 ## Offline buffer
 
-If the agent cannot reach StatusTick for more than about 25 seconds, it keeps checking on its own for up to an hour. It repeats each monitor's last check and keeps the results. Browser checks are not repeated.
-
-When StatusTick answers again, the agent uploads the results. StatusTick stores them with the time they were checked and shows the period as "reported late". Results older than 2 hours are dropped.
-
-The agent keeps up to `STATUSTICK_BUFFER_SIZE` results and drops the oldest when full. By default they are in memory and lost on restart. To keep them, set `STATUSTICK_BUFFER_DIR` to a mounted volume that user `10001` can write. The folder holds the repeated checks, including HTTP headers and bodies, so keep it private to the agent. Database passwords and MCP auth headers are never written to it.
+After about 25 seconds without StatusTick, the agent keeps repeating each monitor's last check for up to an hour
+(not browser checks) and uploads the results later; StatusTick shows them as reported late and drops those older
+than 2 hours. Results live in memory unless `STATUSTICK_BUFFER_DIR` points at a volume user `10001` can write. Keep
+that folder private; database passwords and MCP auth headers are never written to it.
 
 ## Heartbeat relay
 
-Heartbeat monitors expect each job to call its ping URL. If a server has no internet access, it can ping the agent instead, and the agent forwards the ping to StatusTick. Turn it on with `STATUSTICK_RELAY_PORT`:
+Servers without internet access can ping the agent instead of the public ping URL:
 
 ```bash
 -e STATUSTICK_RELAY_PORT=8080 -p 10.0.0.5:8080:8080
 ```
-
-Then use the agent's address with the path of the ping URL:
 
 ```bash
 curl -fsS -m 10 http://10.0.0.5:8080/ping/<token>          # success
@@ -230,15 +210,13 @@ curl -fsS -m 10 http://10.0.0.5:8080/ping/<token>/start    # the job started
 curl -fsS -m 10 http://10.0.0.5:8080/ping/<token>/fail     # the job failed
 ```
 
-- Add `?run=<id>` to match each start to its finish. The id is 1 to 64 letters, digits, `-` or `_`.
-- The agent only forwards pings for your organization's heartbeat monitors. Other paths and tokens get `404`.
-- It answers `503` until it has received the list of monitors from StatusTick, and `429` above 600 pings a minute from one address.
-- While StatusTick is unreachable, the agent keeps the pings and sends them later with the time they arrived.
-- The relay is plain HTTP without its own authentication: the token in the path is the secret. Only publish the port on an internal address, never to the internet.
+`?run=<id>` (1 to 64 letters, digits, `-`, `_`) pairs a start with its finish. Unknown tokens get `404`; the relay
+answers `503` until it has the monitor list and `429` above 600 pings a minute per address. Pings are kept while
+StatusTick is unreachable. The token in the path is the only secret: publish the port on an internal address only.
 
 ## Kubernetes service discovery
 
-With `STATUSTICK_DISCOVERY=kubernetes`, the agent creates monitors from Service annotations:
+With `STATUSTICK_DISCOVERY=kubernetes`, annotated Services become monitors:
 
 ```yaml
 metadata:
@@ -248,17 +226,13 @@ metadata:
     statustick.com/interval: "5m"             # optional, 30 seconds to 1 day, default 60 seconds
 ```
 
-- The target is the Service's cluster DNS name, on the port in the annotation or the Service's first port.
-- Changing the annotation updates the monitor. Removing it pauses the monitor and keeps its history.
-- In StatusTick you can only change a discovered monitor's alert settings. Everything else comes from the annotation.
-- A location takes up to 100 discovered monitors. The agent logs Services it left out and why.
-- The service account only needs `get`, `list` and `watch` on `services`.
-- With `STATUSTICK_ALLOW`, add `*.svc`, or the checks will be refused.
-- Use one cluster per location. Agents of one location in two clusters would pause each other's monitors.
+The target is the Service's cluster DNS name. Removing the annotation pauses the monitor; in StatusTick only its
+alert settings can change. Up to 100 per location. The service account needs `get`, `list` and `watch` on
+`services`. With `STATUSTICK_ALLOW`, add `*.svc`. Use one cluster per location.
 
 ## Metrics
 
-The agent keeps Prometheus metrics. Labels only come from fixed sets, such as check type and result. A target, host name, monitor or token is never a metric or a label.
+Labels come from fixed sets; never a target, host, monitor or token.
 
 <!-- metrics:start -->
 | Metric | Type | Labels | Meaning |
@@ -278,9 +252,7 @@ The agent keeps Prometheus metrics. Labels only come from fixed sets, such as ch
 | `st_relay_pings_total` | counter | `result` | Heartbeat relay on: relayed pings, by result: accepted, rejected or failed. |
 <!-- metrics:end -->
 
-The agent also exposes `process_*` metrics for CPU time and resident memory.
-
-To scrape them, set `METRICS_PORT` (for example `9464`) and publish it on an internal address only. An alert for a disconnected agent:
+Plus `process_*` CPU and resident memory. Scrape with `METRICS_PORT` on an internal address. Example alert:
 
 ```yaml
 - alert: StatusTickAgentDisconnected
@@ -288,40 +260,27 @@ To scrape them, set `METRICS_PORT` (for example `9464`) and publish it on an int
   for: 5m
 ```
 
-### Share health with StatusTick
-
-This is off by default. When you turn it on, with **Share health** in the dashboard or `STATUSTICK_SHARE_METRICS=true`, the agent sends the metrics above to StatusTick every minute. StatusTick keeps only the latest snapshot and deletes it when you turn sharing off. `STATUSTICK_SHARE_METRICS=false` turns it off for good.
+**Share health** (off by default) sends these metrics to StatusTick every minute; it keeps only the latest snapshot.
+`STATUSTICK_SHARE_METRICS=false` turns sharing off for good.
 
 ## Troubleshooting
-
-Run `doctor` first:
 
 ```bash
 docker exec statustick-agent statustick-agent doctor
 ```
 
-It checks, in order: the token format, DNS, TCP and TLS to StatusTick, the proxy, whether StatusTick answers, whether it accepts the token, and the clock. Each step prints `OK`, `FAIL` with a fix, or `SKIP`. It exits with `1` if a step failed.
-
-```text
-OK    Token format: sta_live_ab12cd… (53 characters)
-OK    DNS for agent.statustick.com: agent.statustick.com is 203.0.113.10, 4 ms
-OK    TCP 443: connected to 203.0.113.10, 21 ms
-FAIL  TLS to agent.statustick.com: the certificate issued by Corp Inspection CA is not trusted (UNABLE_TO_GET_ISSUER_CERT_LOCALLY)
-      Fix: A proxy or firewall on the way probably inspects TLS: put its CA certificate in a PEM file and set NODE_EXTRA_CA_CERTS to it.
-```
-
-- `doctor --target https://intranet.corp.example/health` also tests one target, with the agent's target rules.
-- `doctor --report` hides host names and addresses so you can send the output to support.
-- `doctor` warns when the machine has too little memory or `/dev/shm` for its browser runs.
-
-The agent logs one line each time its state changes, for example `Connected`, `Disconnected`, `Token rejected` or `Update required`.
+`doctor` checks the token format, DNS, TCP and TLS to StatusTick, the proxy, the token and the clock, printing `OK`,
+`FAIL` with a fix, or `SKIP`, and exits `1` on a failure. `--target <url>` also tests one target; `--report` hides
+host names and addresses for support. The agent logs one line per state change (`Connected`, `Disconnected`,
+`Token rejected`, `Update required`).
 
 ## Updates
 
-Releases follow semantic versioning. `ghcr.io/statustick/agent:1` follows every 1.x release. Pin a version such as `1.0.1` to stay on it.
+`ghcr.io/statustick/agent:1` follows every 1.x release; pin `1.0.1` to stay on one.
 
 ```bash
 docker compose pull statustick-agent && docker compose up -d statustick-agent
 ```
 
-StatusTick has a recommended and a minimum agent version. An agent older than the recommended one still works, and the dashboard shows "Update available". An agent older than the minimum is refused and stops. A new minimum is announced by email at least 30 days ahead, except for security fixes.
+Agents below StatusTick's recommended version show "Update available"; below the minimum they are refused. A new
+minimum is announced by email at least 30 days ahead, except for security fixes.
