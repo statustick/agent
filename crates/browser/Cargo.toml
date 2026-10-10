@@ -9,7 +9,7 @@ publish = false
 
 [dependencies]
 base64 = "0.23.1"
-fancy-regex = "0.14"
+fancy-regex = "0.19"
 hex = "0.4.3"
 rand = "0.10.3"
 serde_json = { version = "1.0.151", features = ["preserve_order"] }
