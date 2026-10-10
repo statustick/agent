@@ -19,7 +19,7 @@ fix(checks): match a DNS TXT expected value against the whole record
 
 - `feat` makes a minor release and `fix` a patch release. `perf` and `revert` also show in the changelog. `docs`, `test`, `refactor`, `build`, `ci`, `chore` and `style` release nothing.
 - `!` after the type, or a `BREAKING CHANGE:` footer, makes a major release.
-- Scopes: `agent`, `checks`, `browser`, `sandbox`, `chart`, `docs`, `deps`. Changes under `charts/` release the chart; everything else releases the agent.
+- Scopes: `agent`, `checks`, `browser`, `sandbox`, `chart`, `docs`, `deps` (`deps-dev` for development-only dependencies). Changes under `charts/` release the chart; everything else releases the agent.
 - Use the imperative, lower case, no full stop. No tracker ids; link GitHub issues instead.
 
 Versions, changelogs and tags are made by release-please. Don't change them by hand.

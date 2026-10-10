@@ -23,7 +23,7 @@ jobs:
         env:
           TITLE: ${{ github.event.pull_request.title }}
         run: |
-          printf '%s\n' "$TITLE" | grep -qE '^(feat|fix|perf|revert|docs|refactor|test|build|ci|chore|style)(\((agent|checks|browser|sandbox|chart|docs|deps)\))?!?: [a-z]' \
+          printf '%s\n' "$TITLE" | grep -qE '^(feat|fix|perf|revert|docs|refactor|test|build|ci|chore|style)(\((agent|checks|browser|sandbox|chart|docs|deps|deps-dev)\))?!?: [a-z]' \
             || { echo "Title must be type(scope): summary, e.g. 'fix(checks): retry DNS once'. See CONTRIBUTING.md."; exit 1; }
           if printf '%s\n' "$TITLE" | grep -qE '\b[A-Z][A-Z0-9]+-[0-9]+\b'; then echo "Title must not name a tracker ticket id."; exit 1; fi
 
