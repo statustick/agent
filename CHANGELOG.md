@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/statustick/agent/compare/agent-v1.0.2...agent-v1.1.0) (2026-10-10)
+
+
+### Features
+
+* **checks:** ask the zone's own name servers for DNS checks ([#31](https://github.com/statustick/agent/issues/31)) ([d9e4084](https://github.com/statustick/agent/commit/d9e4084718b5dc39362cd03e73ecfc93f6456c8f))
+
 ## [1.0.2](https://github.com/statustick/agent/compare/agent-v1.0.1...agent-v1.0.2) (2026-10-09)
 
 
