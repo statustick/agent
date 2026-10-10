@@ -1,8 +1,7 @@
 # Agent security
 
-The agent runs inside your network and takes check definitions from StatusTick over the internet. This page lists what it does, what it sends, the threats we designed against and the tests that cover them.
-
-To report a problem, see [SECURITY.md](../SECURITY.md).
+The agent runs inside your network and takes check definitions from StatusTick. Report problems through
+[SECURITY.md](../SECURITY.md).
 
 ## What the agent does
 
@@ -34,11 +33,12 @@ The test names are in `crates/*/src` and `crates/*/tests`.
 
 ## Kubernetes
 
-The Helm chart runs the agent as user `10001` with a read-only root file system, the `RuntimeDefault` seccomp profile and all capabilities dropped. `browser.isolation: true` adds `SETUID` and `SETGID` and allows privilege escalation, for the helper that switches each browser run to its own user. That fits the baseline Pod Security level, not the restricted one, so it is off by default.
+The chart runs as user `10001` with a read-only root, `RuntimeDefault` seccomp and no capabilities.
+`browser.isolation: true` adds `SETUID` and `SETGID` for per-run users (baseline Pod Security, not restricted).
 
 ## Known limits
 
-- The guard in a browser script's process is not a kernel boundary. A script that reaches Playwright's internals could talk to the browser directly and get around the proxy. A network namespace per run would close this, but needs privileges the documented setups don't grant. Turn browser runs off on agents that should never run a script.
+- The guard in a browser script's process is not a kernel boundary: a script reaching Playwright's internals could bypass the proxy. Turn browser runs off on agents that should never run a script.
 - Where the container doesn't allow switching users, browser runs share the agent's user and could read its token. The agent logs this at start.
 - The relay port has no authentication beyond the ping token. Keep it on an internal network.
 - `jobs.json` in the buffer folder holds HTTP headers and bodies of repeated checks, which can contain API keys. Keep the folder private.

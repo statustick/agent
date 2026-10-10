@@ -1,10 +1,6 @@
 # statustick-agent Helm chart
 
-Runs one StatusTick agent in Kubernetes: a Deployment with one pod and a PodDisruptionBudget. The agent connects out to `agent.statustick.com`; nothing calls it from outside the cluster.
-
-## Install
-
-Add an agent to a private location in StatusTick and copy its token. Put the token in a Secret, then install the chart:
+One StatusTick agent: a Deployment with one pod and a PodDisruptionBudget. It only connects out.
 
 ```bash
 kubectl create namespace statustick
@@ -13,19 +9,18 @@ helm install statustick-agent oci://ghcr.io/statustick/charts/statustick-agent \
   -n statustick --set existingSecret.name=statustick-agent --set browser.isolation=true
 ```
 
-To upgrade, run `helm upgrade` with `--reuse-values`. To change the token, update the Secret and run `kubectl rollout restart -n statustick deploy/statustick-agent`.
+Upgrade with `helm upgrade --reuse-values`. After changing the token Secret, run
+`kubectl rollout restart -n statustick deploy/statustick-agent`. One release is one agent and the chart refuses a
+second replica (it would stop the first); install the chart twice with two tokens for two agents.
 
-One release is one agent, so the chart refuses more than one replica: a second pod with the same token would stop the first. For two agents, install the chart twice with two tokens.
+- `browser.isolation: true` runs each browser check as its own user. It adds `SETUID` and `SETGID` and allows
+  privilege escalation: fine for the baseline Pod Security level, not the restricted one.
+- The pod has a 512 MB in-memory `/dev/shm` and no memory limit; a browser run can use up to 2 GB.
+- `relay.enabled` adds a `ClusterIP` Service for the heartbeat relay. Never expose it publicly.
+- `discovery.enabled` adds a ServiceAccount that can only `get`, `list` and `watch` Services.
+- `buffer.persistence.enabled` keeps the offline buffer on a volume instead of an `emptyDir`.
 
-Notes:
-
-- `browser.isolation: true` runs each browser check as its own user, so a script cannot read the agent's token. It adds the `SETUID` and `SETGID` capabilities and allows privilege escalation, which the baseline Pod Security level allows and the restricted one does not. Without it, browser checks run as the agent's user.
-- The pod has a 512 MB in-memory `/dev/shm` for Chromium and no memory limit, because a browser run can use up to 2 GB.
-- `relay.enabled` adds a `ClusterIP` Service for the heartbeat relay. Keep it internal; never expose it through a public Ingress or load balancer.
-- `discovery.enabled` adds a ServiceAccount that can only `get`, `list` and `watch` Services, and mounts its token. Without it, the pod gets no service account token.
-- The offline buffer is an `emptyDir`. Set `buffer.persistence.enabled` to keep it on a volume.
-
-See [the agent guide](https://github.com/statustick/agent/blob/main/docs/agent.md) for what each setting does.
+What each setting does: [the agent guide](https://github.com/statustick/agent/blob/main/docs/agent.md).
 
 ## Values
 
