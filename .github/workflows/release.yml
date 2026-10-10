@@ -32,7 +32,7 @@ jobs:
       chart-version: ${{ steps.release.outputs['charts/statustick-agent--version'] }}
     steps:
       - id: release
-        uses: googleapis/release-please-action@v4
+        uses: googleapis/release-please-action@v5
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
@@ -65,13 +65,13 @@ jobs:
           sudo systemctl restart docker
       - name: Check that the release matches version.txt
         run: '[ "$(cat version.txt)" = "$VERSION" ] || { echo "version.txt is not $VERSION"; exit 1; }'
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
         with:
           buildkitd-config-inline: |
             [registry."docker.io"]
               mirrors = ["mirror.gcr.io"]
       - name: Build the static binary
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           target: binary-export
@@ -83,12 +83,12 @@ jobs:
         run: |
           file dist/statustick-agent | grep -q 'statically linked'
           tar -czf "statustick-agent-linux-${{ matrix.arch }}.tar.gz" -C dist statustick-agent
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: binary-${{ matrix.arch }}
           path: statustick-agent-linux-${{ matrix.arch }}.tar.gz
       - name: Build the image for the checks
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/${{ matrix.arch }}
@@ -103,14 +103,14 @@ jobs:
           severity: CRITICAL
           ignore-unfixed: true
           exit-code: '1'
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - id: push
         name: Push the image by digest
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/${{ matrix.arch }}
@@ -120,7 +120,7 @@ jobs:
           cache-from: type=gha,scope=agent-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=agent-${{ matrix.arch }}
       - run: echo "${{ steps.push.outputs.digest }}" > digest-${{ matrix.arch }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: digest-${{ matrix.arch }}
           path: digest-${{ matrix.arch }}
@@ -138,19 +138,19 @@ jobs:
       IMAGE: ${{ vars.AGENT_IMAGE || 'ghcr.io/statustick/agent' }}
       VERSION: ${{ inputs.version || needs.release-please.outputs.agent-version }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: digest-*
           merge-multiple: true
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       - uses: sigstore/cosign-installer@v3
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.IMAGE }}
           flavor: latest=false
@@ -178,7 +178,7 @@ jobs:
     env:
       TAG: agent-v${{ inputs.version || needs.release-please.outputs.agent-version }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: binary-*
           merge-multiple: true
@@ -201,7 +201,7 @@ jobs:
       REGISTRY: ${{ vars.CHART_REGISTRY || 'ghcr.io/statustick/charts' }}
     steps:
       - uses: actions/checkout@v7
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
       - run: helm lint --strict charts/statustick-agent --set existingSecret.name=statustick-agent
       - run: helm package charts/statustick-agent --destination dist
       - name: Push the chart to GHCR
