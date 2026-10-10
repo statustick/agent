@@ -56,6 +56,14 @@ jobs:
         env:
           CONTRACT_DATABASES: postgres=127.0.0.1:55432,redis=127.0.0.1:56379,mongodb=127.0.0.1:57017
 
+  deny:
+    if: github.event.action != 'edited'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
   sandbox:
     if: github.event.action != 'edited'
     runs-on: ubuntu-latest
