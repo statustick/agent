@@ -37,14 +37,15 @@ async fn run(check: &Map<String, Value>, start: Instant) -> Result<Vec<(&'static
         }
         Some("dns") => {
             let record_type = string_field(check, "recordType").unwrap_or_else(|| "A".to_string());
-            let records =
+            let (records, took) =
                 resolve_dns(check.get("hostname").and_then(Value::as_str).unwrap_or(""), &record_type, timeout_field(check, "timeout", 10000.0)).await?;
+            let time = took.map_or_else(|| elapsed_ms(start), |time| time.as_millis() as i64);
             let up = has_records(&records);
             let list = match records {
                 Value::Array(items) => Value::Array(items),
                 single => Value::Array(vec![single]),
             };
-            Ok(vec![("status", Value::from(if up { "up" } else { "down" })), ("responseTime", Value::from(elapsed_ms(start))), ("records", list)])
+            Ok(vec![("status", Value::from(if up { "up" } else { "down" })), ("responseTime", Value::from(time)), ("records", list)])
         }
         _ => Ok(vec![("status", Value::from("error")), ("error", Value::from("Unknown check type")), ("responseTime", Value::from(elapsed_ms(start)))]),
     }
