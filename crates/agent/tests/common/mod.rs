@@ -7,6 +7,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::process::{Child, Command, Stdio};
 
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -237,8 +238,16 @@ pub async fn until(what: &str, ms: u64, predicate: impl Fn() -> bool) {
     }
 }
 
+/// A port below the OS's ephemeral range, so no `bind(0)` elsewhere in the run can take it before the agent binds it.
 pub fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+    static NEXT: AtomicU16 = AtomicU16::new(0);
+    let base = 20000 + (std::process::id() % 40) as u16 * 250;
+    loop {
+        let port = base + NEXT.fetch_add(1, Ordering::Relaxed) % 250;
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return port;
+        }
+    }
 }
 
 /// A local HTTP target for checks: JSON on /json, text elsewhere.
