@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/statustick/agent/compare/agent-v1.1.0...agent-v1.1.1) (2026-11-02)
+
+
+### Bug Fixes
+
+* **deps:** update crates with security advisories ([#36](https://github.com/statustick/agent/issues/36)) ([cb001e7](https://github.com/statustick/agent/commit/cb001e76788a0db31f8c0acc7b4a2ab210a5023c))
+
 ## [1.1.0](https://github.com/statustick/agent/compare/agent-v1.0.2...agent-v1.1.0) (2026-10-10)
 
 
