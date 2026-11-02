@@ -55,6 +55,11 @@ jobs:
       - run: cargo test --workspace --all-features
         env:
           CONTRACT_DATABASES: postgres=127.0.0.1:55432,redis=127.0.0.1:56379,mongodb=127.0.0.1:57017
+      - name: Database server logs
+        if: failure()
+        run: |
+          docker ps -a
+          docker logs $(docker ps -aq --filter ancestor=mongo:8.0) 2>&1 | tail -40
 
   deny:
     if: github.event.action != 'edited'
