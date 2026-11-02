@@ -46,7 +46,7 @@ jobs:
         run: |
           docker run -d -p 127.0.0.1:55432:5432 -e POSTGRES_USER=statustick -e POSTGRES_PASSWORD=contract -e POSTGRES_DB=statustick postgres:18-alpine
           docker run -d -p 127.0.0.1:56379:6379 redis:7-alpine redis-server --requirepass contract
-          docker run -d -p 127.0.0.1:57017:27017 -e MONGO_INITDB_ROOT_USERNAME=statustick -e MONGO_INITDB_ROOT_PASSWORD=contract mongo:8.0
+          docker run -d -p 127.0.0.1:57017:27017 -e MONGO_INITDB_ROOT_USERNAME=statustick -e MONGO_INITDB_ROOT_PASSWORD=contract mongo:8.2
       - run: sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"
       - run: cargo fmt --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -59,7 +59,7 @@ jobs:
         if: failure()
         run: |
           docker ps -a
-          docker logs $(docker ps -aq --filter ancestor=mongo:8.0) 2>&1 | tail -40
+          docker logs $(docker ps -aq --filter ancestor=mongo:8.2) 2>&1 | tail -40
 
   deny:
     if: github.event.action != 'edited'
