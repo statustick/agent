@@ -260,7 +260,9 @@ Plus `process_*` CPU and resident memory. Scrape with `METRICS_PORT` on an inter
   for: 5m
 ```
 
-**Share health** (off by default) sends these metrics to StatusTick every minute; it keeps only the latest snapshot.
+**Share health** (off by default) sends the `st_*` metrics above and the `process_*` CPU and resident memory to
+StatusTick every minute; it keeps only the latest snapshot. Never the other default metrics, a target, host name, result
+detail, response body, secret or token.
 `STATUSTICK_SHARE_METRICS=false` turns sharing off for good.
 
 ## Troubleshooting
