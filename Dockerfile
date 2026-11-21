@@ -20,7 +20,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 FROM scratch AS binary-export
 COPY --from=binary /statustick-agent /statustick-agent
 
-FROM node:24-trixie-slim@sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66
+FROM node:24-trixie-slim@sha256:af02d57b57719b9657a45199a79264a9437940cd55b3c7b3fc99615654f124a0
 
 # The Playwright version comes from sandbox/package.json; Chromium is its headless shell.
 # tini runs as PID 1 and reaps the processes that browser runs leave behind.
